@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # 1. The Agent Container (Python)
+  agent:
+    build:
+      context: ./agent
+    container_name: rl_firewall_agent
+    cap_add:
+      - NET_ADMIN # Required to manipulate iptables and intercept packets
+    network_mode: "host" # Allows the agent to monitor host interfaces
+    environment:
+      - REDIS_HOST=redis
+      - API_URL=http://webserver/api
+    depends_on:
+      - redis
+      - backend
+
+  # 2. The Application Container (PHP-FPM / Laravel)
+  backend:
+    build:
+      context: ./backend
+    container_name: rl_firewall_backend
+    environment:
+      - DB_CONNECTION=mysql
+      - DB_HOST=db
+      - REDIS_HOST=redis
+      - BROADCAST_DRIVER=reverb # Laravel Reverb for WebSockets
+    depends_on:
+      - db
+      - redis
+
+  # 3. The Web Server Container (Nginx / Vue.js)
+  webserver:
+    build:
+      context: ./frontend
+    container_name: rl_firewall_web
+    ports:
+      - "80:80"
+      - "8080:8080" # Reverb WebSocket Port
+    depends_on:
+      - backend
+
+  # 4. State Container (MySQL/PostgreSQL)
+  db:
+    image: mysql:8.0
+    container_name: rl_firewall_db
+    environment:
+      - MYSQL_DATABASE=firewall_telemetry
+      - MYSQL_ROOT_PASSWORD=secret
+    volumes:
+      - db_data:/var/lib/mysql
+
+  # 5. Broker Container (Redis)
+  redis:
+    image: redis:alpine
+    container_name: rl_firewall_redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  db_data:

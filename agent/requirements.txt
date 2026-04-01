@@ -1,0 +1,6 @@
+NetfilterQueue==1.1.0    # Kernel packet interception
+scapy==2.5.0             # Packet parsing and manipulation
+torch==2.1.0             # PyTorch for the Deep Q-Network (DQN)
+redis==5.0.1             # Pub/Sub telemetry broadcasting
+requests==2.31.0         # HTTP client for RESTCONF API calls
+numpy==1.26.0            # Matrix operations for state vectors
