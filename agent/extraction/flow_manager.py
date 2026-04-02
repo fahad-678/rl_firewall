@@ -75,7 +75,7 @@ class FlowManager:
 
     def _compile_state_vector(self, flow: Flow) -> list:
         """
-        Transforms raw flow data into the 10-dimensional state vector
+        Transforms raw flow data into a 12-dimensional state vector
         required by the DQN agent.
         """
         # 1. Timing Dynamics (Inter-Arrival Times)
@@ -92,16 +92,32 @@ class FlowManager:
         duration = flow.arrival_times[-1] - flow.arrival_times[0] if len(flow.arrival_times) > 1 else 0.001
         throughput = sum(flow.packet_sizes) / duration
         
-        # Construct raw vector
+        # Autocorrelation ranges from -1 to 1. Shift it to 0.0 -> 1.0 for the neural net
+        normalized_autocorr = (iat_stats["autocorr"] + 1.0) / 2.0
+
+        # Construct raw 12-dimensional vector 
         raw_vector = [
-            iat_stats["mean"], iat_stats["std"],
-            size_stats["mean"], size_stats["std"], size_stats["max"],
-            entropy_stats["mean"], entropy_stats["std"],
-            duration, throughput, len(flow.packet_sizes)
+            iat_stats["mean"], 
+            iat_stats["std"], 
+            normalized_autocorr,          # NEW: IAT Autocorrelation
+            size_stats["mean"], 
+            size_stats["std"], 
+            size_stats["max"], 
+            size_stats["iqr"],            # NEW: Size IQR
+            entropy_stats["mean"], 
+            entropy_stats["var"],         # REPLACED: Entropy Variance
+            duration, 
+            throughput, 
+            len(flow.packet_sizes)
         ]
         
-        # Heuristic maximums for normalization (these would be tuned in production)
-        max_values = [1.0, 1.0, 1500, 500, 1500, 1.0, 0.5, 60.0, 1000000, self.window_size]
+        # Heuristic maximums for normalization (must match the 12 dimensions above)
+        max_values = [
+            1.0, 1.0, 1.0,                  # IAT (Autocorr is already pre-normalized)
+            1500, 500, 1500, 1500,          # Size (1500 is standard ethernet MTU)
+            1.0, 1.0,                       # Entropy
+            60.0, 1000000, self.window_size # Volumetrics
+        ]
         
         return normalize_vector(raw_vector, max_values)
 

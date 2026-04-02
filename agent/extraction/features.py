@@ -28,19 +28,35 @@ def calculate_shannon_entropy(payload: bytes) -> float:
 
 def extract_statistical_features(values: list) -> dict:
     """
-    Derives mean, standard deviation, min, and max from a list of values 
-    (used for Payload Sizes and Inter-Arrival Times).
+    Derives mean, standard deviation, variance, min, max, IQR, and Autocorrelation 
+    from a list of values to construct the reinforcement learning state space[cite: 74, 76].
     """
     if not values:
-        return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0}
+        return {"mean": 0.0, "std": 0.0, "var": 0.0, "min": 0.0, "max": 0.0, "iqr": 0.0, "autocorr": 0.0}
     
     arr = np.array(values)
-    return {
+    stats = {
         "mean": float(np.mean(arr)),
         "std": float(np.std(arr)),
+        "var": float(np.var(arr)),
         "min": float(np.min(arr)),
-        "max": float(np.max(arr))
+        "max": float(np.max(arr)),
+        "iqr": 0.0,
+        "autocorr": 0.0
     }
+    
+    if len(arr) > 1:
+        # Calculate Inter-quartile range (IQR) 
+        q75, q25 = np.percentile(arr, [75, 25])
+        stats["iqr"] = float(q75 - q25)
+        
+        # Calculate Lag-1 Autocorrelation 
+        if stats["var"] > 0:  # Prevent division by zero if all values are identical
+            corr_matrix = np.corrcoef(arr[:-1], arr[1:])
+            if not np.isnan(corr_matrix[0, 1]):
+                stats["autocorr"] = float(corr_matrix[0, 1])
+                
+    return stats
 
 def normalize_vector(vector: list, max_vals: list) -> list:
     """
