@@ -140,13 +140,31 @@ class RuleManager:
             return False
 
     def _remove_rule(self, target_cidr: str):
-        """Automatically issues deletion commands."""
+        """Automatically issues deletion commands based on rule type."""
+        
+        # Determine if this was a block or a throttle rule
+        rule_data = self.active_rules.get(target_cidr, {})
+        rule_type = rule_data.get('type', 'block') # Default to block
+        clean_ip = target_cidr.split('/')[0]
+        
         if self.mode == "simulation":
-            cmd = f"iptables -D INPUT -s {target_cidr} -j DROP"
+            if rule_type == "block":
+                cmd = f"iptables -D INPUT -s {target_cidr} -j DROP"
+            else:
+                limit_name = f"throttle_{clean_ip.replace('.', '_')}"
+                # Must match the exact insertion string to delete
+                cmd = f"iptables -D INPUT -s {clean_ip} -m hashlimit --hashlimit-above 50/sec --hashlimit-burst 100 --hashlimit-mode srcip --hashlimit-name {limit_name} -j DROP"
+            
             subprocess.run(cmd.split(), check=False)
+            
         elif self.mode == "hardware":
-            acl_name = f"BLOCK_{target_cidr.replace('/', '_').replace('.', '_')}"
-            url = f"https://{self.mgmt_ip}/restconf/data/ruckus-ip:ip/access-list/extended={acl_name}"
+            if rule_type == "block":
+                acl_name = f"BLOCK_{target_cidr.replace('/', '_').replace('.', '_')}"
+                url = f"https://{self.mgmt_ip}/restconf/data/ruckus-ip:ip/access-list/extended={acl_name}"
+            else:
+                policy_name = f"THROTTLE_{clean_ip.replace('.', '_')}"
+                url = f"https://{self.mgmt_ip}/restconf/data/ruckus-qos:qos/traffic-policies/policy={policy_name}"
+                
             try:
                 requests.delete(url, auth=self.auth, verify=False)
             except requests.exceptions.RequestException:
@@ -169,3 +187,82 @@ class RuleManager:
                 
                 for cidr in expired_cidrs:
                     self._remove_rule(cidr)
+
+    def deploy_rate_limit_rule(self, target_ip: str, max_packets_per_second: int = 50, duration_seconds: int = 300):
+        """
+        Deploys a rate-limiting rule to throttle bandwidth for ambiguous flows.
+        """
+        # Ensure we are working with just the IP for hashlimit naming
+        clean_ip = target_ip.split('/')[0]
+
+        with self.lock:
+            # Check if there's already a rate limit or block rule for this IP to prevent bloat
+            if clean_ip in self.active_rules:
+                self.active_rules[clean_ip]['expiration'] = max(self.active_rules[clean_ip]['expiration'], time.time() + duration_seconds)
+                return False, "Rule redundant. TTL extended."
+
+            expiration = time.time() + duration_seconds
+            rule_id = f"THROTTLE_{clean_ip.replace('.', '_')}"
+
+            if self.mode == "simulation":
+                success = self._apply_iptables_throttle(clean_ip, max_packets_per_second)
+            elif self.mode == "hardware":
+                success = self._apply_restconf_throttle(clean_ip, max_packets_per_second)
+            else:
+                success = False
+
+            if success:
+                self.active_rules[clean_ip] = {
+                    'expiration': expiration,
+                    'rule_id': rule_id,
+                    'type': 'throttle', # Track the rule type so we know how to delete it later
+                    'network': ipaddress.ip_network(f"{clean_ip}/32", strict=False)
+                }
+                return True, f"Bandwidth throttled to {max_packets_per_second} pps."
+            
+            return False, "Rate limit deployment failed."
+
+    def _apply_iptables_throttle(self, target_ip: str, limit: int) -> bool:
+        """
+        Uses the Linux hashlimit module to drop packets ONLY when they exceed 
+        the allowed bandwidth threshold, effectively rate-limiting the connection.
+        """
+        try:
+            # Command: Drop traffic from this IP IF it exceeds X packets/second (with a small burst allowance)
+            limit_name = f"throttle_{target_ip.replace('.', '_')}"
+            cmd = (f"iptables -I INPUT 1 -s {target_ip} -m hashlimit "
+                   f"--hashlimit-above {limit}/sec --hashlimit-burst {limit * 2} "
+                   f"--hashlimit-mode srcip --hashlimit-name {limit_name} -j DROP")
+            subprocess.run(cmd.split(), check=True)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
+    def _apply_restconf_throttle(self, target_ip: str, limit: int) -> bool:
+        """
+        Pushes a QoS Rate-Limiting/Policing policy to the Ruckus switch via RESTCONF.
+        """
+        # Note: Implementation depends heavily on the specific Ruckus YANG QoS model.
+        # This payload creates a standard IP ACL bound to a rate-limiting policy.
+        url = f"https://{self.mgmt_ip}/restconf/data/ruckus-qos:qos/traffic-policies"
+        headers = {"Content-Type": "application/yang-data+json"}
+        
+        policy_name = f"THROTTLE_{target_ip.replace('.', '_')}"
+        
+        payload = {
+            "traffic-policies": {
+                "policy": [
+                    {
+                        "name": policy_name,
+                        "rate-limit": limit * 1500 * 8, # Approximate bits per second (assuming 1500 MTU)
+                        "action": "drop"
+                    }
+                ]
+            }
+        }
+        
+        try:
+            requests.post(url, auth=self.auth, headers=headers, data=json.dumps(payload), verify=False)
+            return True
+        except requests.exceptions.RequestException:
+            return False

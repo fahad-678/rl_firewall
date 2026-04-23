@@ -66,7 +66,7 @@ def process_packet(packet):
         timer_start = time.time()
         
         # Phase 2: Feature Extraction
-        state_vector = flow_manager.process_packet(scapy_pkt)
+        state_vector, is_terminal = flow_manager.process_packet(scapy_pkt)
         
         if state_vector:
             # Phase 5: DQN Inference
@@ -104,42 +104,54 @@ def process_packet(packet):
             if flow_key in flow_states:
                 prev = flow_states[flow_key]
                 
-                # Push the transition tuple (S, A, R, S') to the Experience Replay Buffer 
+                # Push the transition tuple to the Experience Replay Buffer
                 dqn_agent.memory.push(
                     state=prev['state'],
                     action=prev['action'],
                     reward=prev['reward'],
                     next_state=state_vector,
-                    done=0 # Set to 1 if the flow was terminated
+                    # We dynamically pass 1 if the flow ended via FIN/RST, otherwise 0
+                    done=1 if is_terminal else 0 
                 )
                 
-                # Trigger the Bellman optimization step (Stochastic Gradient Descent) 
                 dqn_agent.optimize_model()
                 
-                # Periodically synchronize the frozen Target Network [cite: 198]
                 if dqn_agent.steps_done % 1000 == 0:
                     dqn_agent.update_target_network()
 
-            # Save the current state to act as the "Previous State" for the next window iteration
-            flow_states[flow_key] = {
-                'state': state_vector,
-                'action': action,
-                'reward': total_reward
-            }
+            # If the flow is dead, remove it from our previous state tracker so it doesn't leak memory
+            if is_terminal:
+                if flow_key in flow_states:
+                    del flow_states[flow_key]
+            else:
+                # Otherwise, save the current state for the next window
+                flow_states[flow_key] = {
+                    'state': state_vector,
+                    'action': action,
+                    'reward': total_reward
+                }
 
             # --- ENFORCEMENT ---
             status = "UNKNOWN"
             if action == 0:
                 packet.accept() 
                 status = "ACCEPTED"
-            elif action == 1:
-                # Cache the exact state vector so we can punish the AI later if a human overrides it
+                
+            elif action == 1: # DROP
+                # Cache the exact state vector for Human-in-the-Loop unlearning
                 blocked_states_cache[src_ip] = state_vector
                 
+                # Deploy absolute block via Rule Manager [cite: 161]
                 rule_manager.deploy_block_rule(src_ip, duration_seconds=600)
                 packet.drop()   
                 status = "BLOCKED"
-            elif action == 2:
+                
+            elif action == 2: # RATE LIMIT
+                # Deploy network-layer bandwidth throttling 
+                rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=50, duration_seconds=300)
+                
+                # Accept the CURRENT packet sitting in the queue. 
+                # The kernel/iptables will start dropping FUTURE packets if they exceed the rate limit.
                 packet.accept() 
                 status = "RATE_LIMITED"
                 

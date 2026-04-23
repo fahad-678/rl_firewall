@@ -47,12 +47,11 @@ class FlowManager:
 
     def process_packet(self, packet):
         """
-        Ingests a packet, updates flow state, and returns a State Vector 
-        if the sliding window threshold is met.
+        Ingests a packet, updates flow state, and returns (State Vector, is_terminal).
         """
         key = self._generate_flow_key(packet)
         if not key:
-            return None # Ignore non-IP traffic
+            return None, False
             
         flow = self.active_flows[key]
         
@@ -60,18 +59,30 @@ class FlowManager:
         payload = packet[TCP].payload if packet.haslayer(TCP) else None
         flow.add_packet(packet, payload)
         
-        # Check if sliding window epoch is reached
-        if len(flow.packet_sizes) >= self.window_size:
+        # NEW: Check for TCP flow termination flags
+        is_terminal = False
+        if packet.haslayer(TCP):
+            flags = packet[TCP].flags
+            # 'F' = FIN (graceful teardown), 'R' = RST (abrupt connection reset)
+            if 'F' in flags or 'R' in flags:
+                is_terminal = True
+        
+        # Check if sliding window epoch is reached OR the flow is suddenly terminated
+        if len(flow.packet_sizes) >= self.window_size or is_terminal:
             state_vector = self._compile_state_vector(flow)
             
-            # Reset the sliding window for this flow
-            flow.packet_sizes = []
-            flow.arrival_times = []
-            flow.payload_entropies = []
+            if is_terminal:
+                # Aggressive garbage collection: delete from memory immediately 
+                del self.active_flows[key]
+            else:
+                # Reset the sliding window for this ongoing flow
+                flow.packet_sizes = []
+                flow.arrival_times = []
+                flow.payload_entropies = []
+                
+            return state_vector, is_terminal
             
-            return state_vector
-            
-        return None
+        return None, False
 
     def _compile_state_vector(self, flow: Flow) -> list:
         """
