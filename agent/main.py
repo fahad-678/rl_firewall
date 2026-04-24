@@ -160,6 +160,8 @@ def process_packet(packet):
                 telemetry_data = f'{{"src_ip": "{src_ip}", "port": {dst_port}, "action": "{status}", "reward": {total_reward:.2f}, "latency_ms": {processing_time_ms:.2f}}}'
                 redis_client.publish('firewall-telemetry', telemetry_data)
                 
+                print(f"[AI] Evaluated IP {src_ip} -> {status} (Reward: {total_reward:.2f})", flush=True)
+                
         else:
             packet.accept()
     else:

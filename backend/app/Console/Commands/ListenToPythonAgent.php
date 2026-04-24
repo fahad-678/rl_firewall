@@ -13,6 +13,7 @@ class ListenToPythonAgent extends Command
 
     public function handle()
     {
+        Redis::connection()->client()->setOption(\Redis::OPT_READ_TIMEOUT, -1);
         $this->info('Listening for firewall telemetry on Redis...');
 
         // Subscribe to the exact Redis channel the Python script publishes to

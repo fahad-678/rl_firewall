@@ -1,4 +1,5 @@
 import time
+import math
 from collections import defaultdict
 from scapy.all import IP, TCP, UDP
 from .features import calculate_shannon_entropy, extract_statistical_features, normalize_vector
@@ -105,6 +106,9 @@ class FlowManager:
         
         # Autocorrelation ranges from -1 to 1. Shift it to 0.0 -> 1.0 for the neural net
         normalized_autocorr = (iat_stats["autocorr"] + 1.0) / 2.0
+
+        if math.isnan(normalized_autocorr):
+            normalized_autocorr = 0.5 #
 
         # Construct raw 12-dimensional vector 
         raw_vector = [
