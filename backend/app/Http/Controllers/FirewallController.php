@@ -39,7 +39,8 @@ class FirewallController extends Controller
         $telemetry = $logs->map(function ($log) {
             return [
                 'id'         => $log->id,
-                'src_ip'     => $log->src_ip,
+                // FIXED: Map the correct database column 'ip_address' to Vue's expected 'src_ip'
+                'src_ip'     => $log->ip_address, 
                 'port'       => $log->port,
                 'confidence' => (float) $log->confidence,
                 'action'     => $log->action,
@@ -63,14 +64,14 @@ class FirewallController extends Controller
         $ip = $request->input('ip');
         $decision = $request->input('decision');
 
-        // 1. Update the local Laravel Database for the UI
-        $log = InterventionLog::where('src_ip', $ip)->latest()->first();
+        // FIXED: Query using 'ip_address' instead of 'src_ip'
+        $log = InterventionLog::where('ip_address', $ip)->latest()->first();
         if ($log) {
             $log->action = $decision === 'BLOCK' ? 'BLOCKED' : 'ACCEPTED';
             $log->save();
         }
 
-        // 2. Publish to the Python AI Agent via Redis
+        // Publish to the Python AI Agent via Redis
         Redis::publish('firewall-overrides', json_encode([
             'ip'       => $ip,
             'decision' => $decision
@@ -90,7 +91,8 @@ class FirewallController extends Controller
 
         $ip = $request->input('ip');
 
-        $log = InterventionLog::where('src_ip', $ip)->latest()->first();
+        // FIXED: Query using 'ip_address' instead of 'src_ip'
+        $log = InterventionLog::where('ip_address', $ip)->latest()->first();
         if ($log) {
             $log->action = 'ACCEPTED';
             $log->save();

@@ -8,6 +8,7 @@ import redis
 import json
 import threading
 import requests
+import queue
 from netfilterqueue import NetfilterQueue
 from scapy.all import IP, TCP
 
@@ -65,7 +66,7 @@ class EpochTracker:
         self.threats_allowed = 0
         self.losses = []
 
-epoch_tracker = EpochTracker(batch_size=100)
+epoch_tracker = EpochTracker(batch_size=10)
 # ---> END NEW CODE <---
 
 # Initialize Redis client for telemetry broadcasting
@@ -76,7 +77,7 @@ except Exception as e:
     redis_client = None
 
 # Initialize core architectural components
-flow_manager = FlowManager(window_size=100)
+flow_manager = FlowManager(window_size=10)
 dqn_agent = DQNAgent(input_dim=12, action_dim=3)
 rule_manager = RuleManager(mode="simulation") 
 
@@ -88,43 +89,66 @@ KNOWN_MALICIOUS_IPS = {"192.168.1.100", "10.0.0.50", "172.16.0.23"}
 # MDP State Tracker: Maps flow keys to their previous state to build (S, A, R, S') tuples
 flow_states = {}
 blocked_states_cache = {}
+telemetry_queue = queue.Queue(maxsize=100)
+metrics_queue = queue.Queue(maxsize=50)
 
-LARAVEL_API_URL = "http://localhost:8000/api/ai/performance"
+LARAVEL_API_URL = "http://localhost/api/ai/performance"
+
+def metrics_worker():
+    """Background thread that saves graph data to Laravel without blocking."""
+    while True:
+        payload = metrics_queue.get()
+        try:
+            requests.post("http://localhost/api/ai/performance", json=payload, timeout=2)
+            print(f"✅ [API] Epoch {payload['epoch']} metrics saved.")
+        except Exception:
+            pass # Fail silently during high load
+        metrics_queue.task_done()
+
+# Start the worker thread
+threading.Thread(target=metrics_worker, daemon=True).start()
 
 def log_metrics_to_laravel(epoch, epsilon, total_reward, loss, threats_blocked, threats_allowed):
-    """
-    Pushes training metrics to the Laravel backend after each epoch.
-    """
+    """Puts the training metrics into the queue instantly."""
     payload = {
         "epoch": epoch,
         "epsilon": epsilon,
-        "cumulative_reward": float(total_reward), # Ensure JSON serializable
+        "cumulative_reward": float(total_reward),
         "loss": float(loss) if loss is not None else 0.0,
         "threats_blocked": int(threats_blocked),
         "threats_allowed": int(threats_allowed)
     }
     
-    try:
-        # 5-second timeout so the agent doesn't hang forever
-        response = requests.post(LARAVEL_API_URL, json=payload, timeout=5)
-        response.raise_for_status()
-        print(f"✅ [API] Epoch {epoch} metrics saved successfully.")
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️ [API Warning] Failed to log metrics to Laravel: {e}")
+    if not metrics_queue.full():
+        metrics_queue.put_nowait(payload)
+    else:
+        print(f"⚠️ [Queue Full] Dropping Epoch {epoch} metrics to keep firewall speed up.")
+
+def telemetry_worker():
+    """Background thread that sends HTTP requests without blocking the firewall."""
+    while True:
+        payload = telemetry_queue.get()
+        try:
+            # We use a session for connection pooling (much faster than raw requests)
+            requests.post("http://localhost/api/firewall/telemetry", json=payload, timeout=0.5)
+        except Exception:
+            pass # Fail silently so the thread doesn't crash
+        telemetry_queue.task_done()
+
+# Start the worker thread the moment the script runs
+threading.Thread(target=telemetry_worker, daemon=True).start()
 
 def send_realtime_telemetry(src_ip, port, confidence, action):
+    """Adds telemetry to the queue if the queue isn't full."""
+    if not telemetry_queue.full(): 
         payload = {
             "src_ip": src_ip,
             "port": int(port),
-            "confidence": float(confidence), # e.g., 0.95 for 95%
-            "action": action # 'BLOCKED', 'ACCEPTED', or 'RATE_LIMITED'
+            "confidence": float(confidence),
+            "action": action
         }
-        try:
-            # We use a very short timeout (e.g., 0.5s or 1s). 
-            # If Laravel is busy, we drop the telemetry rather than slow down the actual firewall enforcement.
-            requests.post("http://localhost:8000/api/firewall/telemetry", json=payload, timeout=0.5)
-        except requests.exceptions.RequestException:
-            pass # Fail silently for real-time telemetry
+        # Put it in the background queue instantly (non-blocking)
+        telemetry_queue.put_nowait(payload)
         
 def setup_iptables():
     """Routes specific traffic into the NFQUEUE."""
@@ -195,6 +219,7 @@ def process_packet(packet):
                     base_reward = -10.0 # Unnecessarily degraded legitimate user experience
                     
             total_reward = base_reward + latency_penalty
+            loss_val = None
             
             # --- MDP STATE TRACKING & TRAINING LOOP ---
             # If we have a previous state for this flow, we now have the "Next State" (S')
@@ -203,27 +228,22 @@ def process_packet(packet):
                 
                 # Push the transition tuple to the Experience Replay Buffer
                 dqn_agent.memory.push(
-                    state=prev['state'],
-                    action=prev['action'],
-                    reward=prev['reward'],
-                    next_state=state_vector,
-                    # We dynamically pass 1 if the flow ended via FIN/RST, otherwise 0
-                    done=1 if is_terminal else 0 
+                    state=prev['state'], action=prev['action'], reward=prev['reward'],
+                    next_state=state_vector, done=1 if is_terminal else 0 
                 )
                 
                 # ---> NEW: RECORD METRICS FOR GRAPH <---
-                loss = dqn_agent.optimize_model()
+                loss_val = dqn_agent.optimize_model()
                 
-                epoch_tracker.record_step(action, total_reward, loss)
-                
-                if epoch_tracker.is_ready():
-                    current_epsilon = dqn_agent.epsilon_end + (dqn_agent.epsilon_start - dqn_agent.epsilon_end) * \
-                                      math.exp(-1. * dqn_agent.steps_done / dqn_agent.epsilon_decay)
-                    epoch_tracker.flush(current_epsilon)
-                # ---> END NEW CODE <---
-
                 if dqn_agent.steps_done % 1000 == 0:
                     dqn_agent.update_target_network()
+
+            epoch_tracker.record_step(action, total_reward, loss_val)
+            
+            if epoch_tracker.is_ready():
+                current_epsilon = dqn_agent.epsilon_end + (dqn_agent.epsilon_start - dqn_agent.epsilon_end) * \
+                                  math.exp(-1. * dqn_agent.steps_done / dqn_agent.epsilon_decay)
+                epoch_tracker.flush(current_epsilon)
 
             # If the flow is dead, remove it from our previous state tracker so it doesn't leak memory
             if is_terminal:
@@ -339,7 +359,7 @@ if __name__ == "__main__":
 
     nfqueue = NetfilterQueue()
     try:
-        nfqueue.bind(QUEUE_NUM, process_packet)
+        nfqueue.bind(QUEUE_NUM, process_packet, max_len=50)
         print("Firewall Agent running. Active Training Loop initialized...")
         nfqueue.run()
     except Exception as e:

@@ -81,7 +81,7 @@ class DQNAgent:
         """Synchronizes the frozen target network with the primary network."""
         self.target_net.load_state_dict(self.policy_net.state_dict())
     
-    def get_confidence(self, state_vector):
+    def get_confidence(self, state_vector, temperature=2.0):
         """
         Converts the raw Q-values of the current state into a confidence percentage.
         """
@@ -92,7 +92,7 @@ class DQNAgent:
             q_values = self.policy_net(state_tensor)
             
             # 2. Apply Softmax to squish Q-values into probabilities (0.0 to 1.0)
-            probabilities = F.softmax(q_values, dim=1)
+            probabilities = F.softmax(q_values / temperature, dim=1)
             
             # 3. Extract the probability of the *chosen* action (the highest value)
             confidence_score = probabilities.max().item()
