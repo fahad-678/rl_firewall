@@ -4,6 +4,7 @@ services:
   agent:
     build:
       context: ./agent
+      network: host
     container_name: rl_firewall_agent
     cap_add:
       - NET_ADMIN

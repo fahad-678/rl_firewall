@@ -23,7 +23,7 @@ class ThreatDetected implements ShouldBroadcastNow
     public function broadcastOn()
     {
         // Broadcasting on a public channel for the dashboard
-        return new Channel('firewall-telemetry');
+        return [new Channel('firewall-telemetry')];
     }
 
     public function broadcastAs()

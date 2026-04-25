@@ -3,9 +3,9 @@ import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from .model import FirewallDQN
 from .replay_buffer import ExperienceReplay
-
 class DQNAgent:
     def __init__(self, input_dim=10, action_dim=3, lr=1e-3, gamma=0.99, batch_size=64):
         self.action_dim = action_dim
@@ -78,3 +78,21 @@ class DQNAgent:
     def update_target_network(self):
         """Synchronizes the frozen target network with the primary network."""
         self.target_net.load_state_dict(self.policy_net.state_dict())
+    
+    def get_confidence(self, state_vector):
+        """
+        Converts the raw Q-values of the current state into a confidence percentage.
+        """
+        with torch.no_grad(): # No need to track gradients for inference
+            state_tensor = torch.tensor([state_vector], dtype=torch.float32)
+            
+            # 1. Get the raw Q-values from the neural network
+            q_values = self.policy_net(state_tensor)
+            
+            # 2. Apply Softmax to squish Q-values into probabilities (0.0 to 1.0)
+            probabilities = F.softmax(q_values, dim=1)
+            
+            # 3. Extract the probability of the *chosen* action (the highest value)
+            confidence_score = probabilities.max().item()
+            
+            return confidence_score

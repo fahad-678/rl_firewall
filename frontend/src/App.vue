@@ -1,9 +1,3 @@
 <template>
-  <div id="app">
-    <ThreatDashboard />
-  </div>
+  <router-view />
 </template>
-
-<script setup>
-import ThreatDashboard from './components/ThreatDashboard.vue';
-</script>

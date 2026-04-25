@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import subprocess
@@ -6,6 +7,7 @@ import time
 import redis
 import json
 import threading
+import requests
 from netfilterqueue import NetfilterQueue
 from scapy.all import IP, TCP
 
@@ -39,6 +41,43 @@ KNOWN_MALICIOUS_IPS = {"192.168.1.100", "10.0.0.50", "172.16.0.23"}
 flow_states = {}
 blocked_states_cache = {}
 
+LARAVEL_API_URL = "http://localhost:8000/api/ai/performance"
+
+def log_metrics_to_laravel(epoch, epsilon, total_reward, loss, threats_blocked, threats_allowed):
+    """
+    Pushes training metrics to the Laravel backend after each epoch.
+    """
+    payload = {
+        "epoch": epoch,
+        "epsilon": epsilon,
+        "cumulative_reward": float(total_reward), # Ensure JSON serializable
+        "loss": float(loss) if loss is not None else 0.0,
+        "threats_blocked": int(threats_blocked),
+        "threats_allowed": int(threats_allowed)
+    }
+    
+    try:
+        # 5-second timeout so the agent doesn't hang forever
+        response = requests.post(LARAVEL_API_URL, json=payload, timeout=5)
+        response.raise_for_status()
+        print(f"✅ [API] Epoch {epoch} metrics saved successfully.")
+    except requests.exceptions.RequestException as e:
+        print(f"⚠️ [API Warning] Failed to log metrics to Laravel: {e}")
+
+def send_realtime_telemetry(src_ip, port, confidence, action):
+        payload = {
+            "src_ip": src_ip,
+            "port": int(port),
+            "confidence": float(confidence), # e.g., 0.95 for 95%
+            "action": action # 'BLOCKED', 'ACCEPTED', or 'RATE_LIMITED'
+        }
+        try:
+            # We use a very short timeout (e.g., 0.5s or 1s). 
+            # If Laravel is busy, we drop the telemetry rather than slow down the actual firewall enforcement.
+            requests.post("http://localhost:8000/api/firewall/telemetry", json=payload, timeout=0.5)
+        except requests.exceptions.RequestException:
+            pass # Fail silently for real-time telemetry
+        
 def setup_iptables():
     """Routes specific traffic into the NFQUEUE."""
     print(f"Setting up iptables to route traffic to NFQUEUE {QUEUE_NUM}...")
@@ -69,8 +108,14 @@ def process_packet(packet):
         state_vector, is_terminal = flow_manager.process_packet(scapy_pkt)
         
         if state_vector:
+
+            state_vector = [0.0 if math.isnan(x) or math.isinf(x) else float(x) for x in state_vector]
+            
             # Phase 5: DQN Inference
             action = dqn_agent.select_action(state_vector)
+            confidence = getattr(dqn_agent, 'get_confidence', lambda x: 1.0)(state_vector)
+
+            CONFIDENCE_THRESHOLD = 0.85 # Require 85% certainty to auto-block
             
             # Stop Latency Timer & Calculate Penalty
             processing_time_ms = (time.time() - timer_start) * 1000
@@ -133,31 +178,41 @@ def process_packet(packet):
 
             # --- ENFORCEMENT ---
             status = "UNKNOWN"
-            if action == 0:
+            
+            # INTERCEPT: AI wants to block, but isn't sure.
+            if action == 1 and confidence < CONFIDENCE_THRESHOLD:
+                # Cache the state so the human can force unlearning/reinforcement later
+                blocked_states_cache[src_ip] = state_vector
+                
+                # QUARANTINE: Apply an incredibly strict rate limit (e.g., 2 packets/sec). 
+                # This keeps the TCP handshake alive for the human to review, but stops data exfiltration.
+                rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=2, duration_seconds=600)
+                packet.accept() 
+                status = "NEEDS_REVIEW"
+
+            elif action == 0:
                 packet.accept() 
                 status = "ACCEPTED"
                 
-            elif action == 1: # DROP
-                # Cache the exact state vector for Human-in-the-Loop unlearning
+            elif action == 1: # High confidence block
                 blocked_states_cache[src_ip] = state_vector
-                
-                # Deploy absolute block via Rule Manager [cite: 161]
                 rule_manager.deploy_block_rule(src_ip, duration_seconds=600)
                 packet.drop()   
                 status = "BLOCKED"
                 
-            elif action == 2: # RATE LIMIT
-                # Deploy network-layer bandwidth throttling 
+            elif action == 2: # Rate limit
                 rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=50, duration_seconds=300)
-                
-                # Accept the CURRENT packet sitting in the queue. 
-                # The kernel/iptables will start dropping FUTURE packets if they exceed the rate limit.
                 packet.accept() 
                 status = "RATE_LIMITED"
                 
-            # Telemetry Broadcasting
+            # --- REAL-TIME TELEMETRY ---
+            # Fire HTTP POST to Laravel Reverb (We moved the confidence calculation higher up)
+            send_realtime_telemetry(src_ip, dst_port, confidence, status)
+            
+            # Keep existing Redis publish if you still need it for other services
             if redis_client:
-                telemetry_data = f'{{"src_ip": "{src_ip}", "port": {dst_port}, "action": "{status}", "reward": {total_reward:.2f}, "latency_ms": {processing_time_ms:.2f}}}'
+                # We are injecting "confidence": {confidence:.4f} into the JSON string
+                telemetry_data = f'{{"src_ip": "{src_ip}", "port": {dst_port}, "action": "{status}", "confidence": {confidence:.4f}, "reward": {total_reward:.2f}, "latency_ms": {processing_time_ms:.2f}}}'
                 redis_client.publish('firewall-telemetry', telemetry_data)
                 
                 print(f"[AI] Evaluated IP {src_ip} -> {status} (Reward: {total_reward:.2f})", flush=True)
@@ -169,11 +224,10 @@ def process_packet(packet):
 
 def handle_human_overrides():
     """
-    Background thread that listens to Redis for human-in-the-loop overrides.
-    Triggers immediate unblocking and forces the DQN to unlearn the false positive.
+    Background thread that listens to Redis for human-in-the-loop decisions.
+    Applies the final firewall rule and forces the DQN to learn from the human.
     """
     if not redis_client:
-        print("Redis client not available. Human-in-the-loop overrides disabled.")
         return
 
     pubsub = redis_client.pubsub()
@@ -185,43 +239,42 @@ def handle_human_overrides():
             try:
                 data = json.loads(message['data'])
                 override_ip = data.get('ip')
+                # Default to 'ALLOW' so older "Revoke Block" buttons still work
+                decision = data.get('decision', 'ALLOW') 
                 
-                if override_ip:
-                    print(f"\n[!] HUMAN OVERRIDE RECEIVED FOR IP: {override_ip}")
+                if override_ip and override_ip in blocked_states_cache:
+                    faulty_state = blocked_states_cache[override_ip]
                     
-                    # 1. Revoke the enforcement at the network layer 
-                    rule_manager._remove_rule(override_ip)
-                    print(f" -> Firewall block revoked for {override_ip}.")
-                    
-                    # 2. Force the AI to Unlearn the misclassification 
-                    if override_ip in blocked_states_cache:
-                        faulty_state = blocked_states_cache[override_ip]
+                    if decision == 'ALLOW':
+                        print(f"\n[!] ANALYST ALLOWED IP: {override_ip}")
+                        # 1. Lift the quarantine rate limit
+                        rule_manager._remove_rule(override_ip)
                         
-                        # Apply a massive negative reward penalty for the false positive
-                        punishment_reward = -100.0
-                        
-                        # Push the (State, Action, Reward, Next State) tuple into memory
-                        # Action = 1 (Block), Done = 1 (Terminal state)
+                        # 2. Punish the AI (It wanted to block legitimate traffic)
                         dqn_agent.memory.push(
-                            state=faulty_state,
-                            action=1, 
-                            reward=punishment_reward,
-                            next_state=faulty_state, 
-                            done=1 
+                            state=faulty_state, action=1, reward=-100.0, next_state=faulty_state, done=1 
                         )
+                        print(" -> Quarantine lifted. Model punished for false positive.")
                         
-                        # Trigger immediate gradient descent to adjust the weights
-                        dqn_agent.optimize_model()
-                        print(" -> Strong negative reward applied. Model optimized to unlearn parameters.")
+                    elif decision == 'BLOCK':
+                        print(f"\n[!] ANALYST BLOCKED IP: {override_ip}")
+                        # 1. Upgrade the quarantine rate limit to a hard block
+                        rule_manager.deploy_block_rule(override_ip, duration_seconds=600)
                         
-                        # Clean up cache
-                        del blocked_states_cache[override_ip]
-                    else:
-                        print(" -> No cached state found for unlearning.")
+                        # 2. Reward the AI (It was unsure, but its instinct to block was correct)
+                        dqn_agent.memory.push(
+                            state=faulty_state, action=1, reward=50.0, next_state=faulty_state, done=1 
+                        )
+                        print(" -> Hard block applied. Model rewarded for catching threat.")
+
+                    # Trigger gradient descent to learn immediately
+                    dqn_agent.optimize_model()
+                    
+                    # Clean up cache
+                    del blocked_states_cache[override_ip]
                         
             except Exception as e:
                 print(f"Error processing override: {e}")
-
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup_iptables)
     signal.signal(signal.SIGTERM, cleanup_iptables)
