@@ -1,123 +1,88 @@
 <template>
-  <div class="space-y-6">
-    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-      <div class="flex items-center justify-between mb-6">
-        <h3 class="text-lg font-semibold text-gray-800">Agent Reward Trajectory</h3>
-        
-        <button @click="fetchPerformanceData" class="flex items-center gap-2 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors" :disabled="isLoading">
-          <RefreshCw :class="{'animate-spin': isLoading}" class="w-4 h-4" />
-          {{ isLoading ? 'Loading...' : 'Refresh Data' }}
-        </button>
+  <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <h3 class="text-lg font-semibold text-gray-800">DQN Learning Curve</h3>
+        <p class="text-sm text-gray-500">Cumulative reward per 100-packet epoch</p>
       </div>
+      <button @click="fetchData" class="text-sm bg-blue-50 text-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-100 transition">
+        Refresh Data
+      </button>
+    </div>
 
-      <div class="h-96 relative flex items-center justify-center">
-        <div v-if="error" class="text-red-500 text-sm flex flex-col items-center">
-          <AlertCircle class="w-8 h-8 mb-2" />
-          {{ error }}
-        </div>
-        
-        <Line v-else-if="!isLoading && chartData.labels.length > 0" :data="chartData" :options="chartOptions" />
-        
-        <div v-else-if="!isLoading" class="text-gray-400 text-sm">
-          No training data available yet.
-        </div>
+    <div class="h-80 w-full relative">
+      <div v-if="isLoading" class="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
+        <span class="animate-pulse text-gray-500 font-medium">Aggregating Training Logs...</span>
       </div>
+      <Line v-if="chartData.labels.length > 0" :data="chartData" :options="chartOptions" />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue' // Added onUnmounted
+import { ref, onMounted } from 'vue'
 import axios from 'axios'
-import { RefreshCw, AlertCircle } from 'lucide-vue-next'
+import {
+  Chart as ChartJS, CategoryScale, LinearScale, PointElement,
+  LineElement, Title, Tooltip, Legend, Filler
+} from 'chart.js'
 import { Line } from 'vue-chartjs'
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js'
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend)
+// Register Chart.js components
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler)
 
 const isLoading = ref(true)
-const error = ref(null)
-let refreshInterval = null // Variable to store our timer ID
+const chartData = ref({ labels: [], datasets: [] })
 
-const chartData = ref({
-  labels: [],
-  datasets: [
-    {
-      label: 'Cumulative Reward',
-      backgroundColor: '#3b82f6',
-      borderColor: '#3b82f6',
-      data: [],
-      tension: 0.4,
-      pointBackgroundColor: '#ffffff',
-      pointBorderWidth: 2,
-      pointRadius: 4
-    }
-  ]
-})
-
-const chartOptions = ref({
+const chartOptions = {
   responsive: true,
   maintainAspectRatio: false,
-  animation: {
-    duration: 0 // Disable animations on data refresh so the chart doesn't bounce constantly
+  scales: {
+    y: {
+      title: { display: true, text: 'Cumulative Reward' },
+      grid: { color: '#f3f4f6' }
+    },
+    x: {
+      grid: { display: false }
+    }
   },
   plugins: {
-    legend: { position: 'top' },
+    legend: { display: false },
     tooltip: { mode: 'index', intersect: false }
-  },
-  scales: {
-    y: { title: { display: true, text: 'Reward Score' }, grid: { color: '#f3f4f6' } },
-    x: { title: { display: true, text: 'Training Epoch' }, grid: { display: false } }
   }
-})
+}
 
-// Added 'isBackground' parameter to prevent UI flickering
-const fetchPerformanceData = async (isBackground = false) => {
-  if (!isBackground) {
-    isLoading.value = true
-  }
-  error.value = null
-  
+const fetchData = async () => {
+  isLoading.value = true
   try {
     const response = await axios.get('/api/ai/performance')
     
     chartData.value = {
-      ...chartData.value,
-      labels: response.data.epochs,
+      labels: response.data.epochs, // e.g., ["Epoch 1", "Epoch 2", ...]
       datasets: [
         {
-          ...chartData.value.datasets[0],
-          data: response.data.rewards
+          label: 'Reward Signal',
+          data: response.data.rewards, // e.g., [-150, 40, 120, 210, ...]
+          borderColor: '#2563eb', // Blue-600
+          backgroundColor: 'rgba(37, 99, 235, 0.1)',
+          borderWidth: 2,
+          pointBackgroundColor: '#ffffff',
+          pointBorderColor: '#2563eb',
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: true,
+          tension: 0.3 // Smooth curves
         }
       ]
     }
-  } catch (err) {
-    console.error("Failed to fetch AI performance data:", err)
-    // Only show the hard error UI if we don't already have chart data displayed
-    if (!isBackground || chartData.value.labels.length === 0) {
-      error.value = "Failed to load training metrics. Is the backend running?"
-    }
+  } catch (error) {
+    console.error("Failed to load AI performance data:", error)
   } finally {
-    if (!isBackground) {
-      isLoading.value = false
-    }
+    isLoading.value = false
   }
 }
 
-// Fetch data on load, then set up the background polling
 onMounted(() => {
-  fetchPerformanceData() // Initial explicit load with spinner
-  
-  // Poll the API every 3 seconds (3000 ms) silently
-  refreshInterval = setInterval(() => {
-    fetchPerformanceData(true) 
-  }, 3000)
-})
-
-// CRITICAL: Clean up the interval when leaving the page
-onUnmounted(() => {
-  if (refreshInterval) {
-    clearInterval(refreshInterval)
-  }
+  fetchData()
 })
 </script>

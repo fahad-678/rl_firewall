@@ -1,20 +1,25 @@
 <?php
 
-use App\Http\Controllers\AiMetricsController;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\AiMetricsController;
+use App\Http\Controllers\FirewallController;
 
-Route::post('/firewall/override', function (Request $request) {
-    $ip = $request->input('ip');
-    // Send command back to Python Agent via Redis
-    Redis::publish('firewall-commands', json_encode(['action' => 'revoke_block', 'ip' => $ip]));
-    return response()->json(['status' => 'Override command dispatched']);
+// AI Performance & Training Routes
+Route::prefix('ai')->group(function () {
+    Route::get('/performance', [AiMetricsController::class, 'getPerformanceData']);
+    Route::post('/performance', [AiMetricsController::class, 'store']);
+    Route::get('/logs', [AiMetricsController::class, 'getTrainingLogs']);
 });
 
-Route::get('/ai/performance', [AiMetricsController::class, 'getPerformanceData']);
-Route::post('/ai/performance', [AiMetricsController::class, 'store']);
-Route::get('/ai/logs', [AiMetricsController::class, 'getTrainingLogs']);
-Route::post('/firewall/telemetry', [AiMetricsController::class, 'receiveTelemetry']);
-Route::post('/firewall/review', [AiMetricsController::class, 'submitReview']);
-Route::get('/firewall/interventions', [AiMetricsController::class, 'getInterventions']);
+// Real-Time Firewall & Telemetry Routes
+Route::prefix('firewall')->group(function () {
+    Route::get('/recent-telemetry', [FirewallController::class, 'getRecentTelemetry']);
+    Route::post('/telemetry', [FirewallController::class, 'receiveTelemetry']);
+    
+    // Human-in-the-loop actions
+    Route::post('/review', [FirewallController::class, 'review']);
+    Route::post('/override', [FirewallController::class, 'override']);
+    
+    // Audit logs
+    Route::get('/interventions', [FirewallController::class, 'getInterventions']);
+});

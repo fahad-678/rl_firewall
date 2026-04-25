@@ -27,6 +27,8 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.memory = ExperienceReplay(capacity=50000)
 
+        self.state_cache = {}
+        
     def select_action(self, state_vector):
         """Epsilon-greedy action selection."""
         sample = random.random()
@@ -96,3 +98,40 @@ class DQNAgent:
             confidence_score = probabilities.max().item()
             
             return confidence_score
+    def apply_human_feedback(self, src_ip, correct_action_label, original_action_label=None):
+        """
+        Forces the DQN to update its weights based on human analyst intervention.
+        """
+        # 1. Map the string labels from Vue/Laravel to your AI's integer action space
+        action_map = {'ALLOW': 0, 'BLOCK': 1, 'RATE_LIMIT': 2, 'NEEDS_REVIEW': 3}
+        correct_action = action_map.get(correct_action_label.upper())
+        original_action = action_map.get(original_action_label.upper()) if original_action_label else None
+
+        # 2. Retrieve the state vector (the packet features) that caused the incident
+        # Note: You must ensure flow_manager.py or your agent caches the last known state per IP
+        state = self.state_cache.get(src_ip)
+        
+        if state is None:
+            print(f"[!] Warning: State for {src_ip} dropped from memory cache. Cannot retrain.")
+            return
+
+        # 3. Memory Injection (The actual Reinforcement)
+        # We forcefully inject extreme rewards into the replay buffer to override the AI's bias
+        
+        # Reward the human's correct choice heavily
+        self.memory.add(state, correct_action, reward=100.0, next_state=state, done=True)
+        
+        # Penalize the AI's original mistake severely (if we know it)
+        if original_action is not None and original_action != correct_action:
+            self.memory.add(state, original_action, reward=-100.0, next_state=state, done=True)
+
+        # 4. Immediate Retraining (Online Learning Spike)
+        # Instead of waiting for the next random batch, we force the network to train
+        # several times right now so the weights adjust before the next packet arrives.
+        print(f"[*] Human Override: Adjusting neural weights for {src_ip} pattern -> {correct_action_label}")
+        
+        for _ in range(5): # Mini-epoch spike
+            self.replay(batch_size=32)
+            
+        # Optional: Save the new weights to disk so it doesn't forget on reboot
+        self.save("firewall_dqn_weights.h5")

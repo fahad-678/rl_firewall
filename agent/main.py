@@ -20,6 +20,54 @@ from enforcement.rule_manager import RuleManager
 QUEUE_NUM = 0
 REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
 
+# ---> NEW: EPOCH TRACKER FOR LEARNING CURVE CHART <---
+class EpochTracker:
+    def __init__(self, batch_size=100):
+        self.batch_size = batch_size
+        self.current_epoch = 1
+        self.steps = 0
+        self.cumulative_reward = 0.0
+        self.threats_blocked = 0
+        self.threats_allowed = 0
+        self.losses = []
+
+    def record_step(self, action, reward, loss):
+        self.steps += 1
+        self.cumulative_reward += reward
+        if loss is not None:
+            self.losses.append(loss)
+            
+        if action == 1: # BLOCKED
+            self.threats_blocked += 1
+        elif action == 0: # ALLOWED
+            self.threats_allowed += 1
+
+    def is_ready(self):
+        return self.steps >= self.batch_size
+
+    def flush(self, epsilon):
+        avg_loss = sum(self.losses) / len(self.losses) if self.losses else 0.0
+        
+        log_metrics_to_laravel(
+            epoch=self.current_epoch,
+            epsilon=epsilon,
+            total_reward=self.cumulative_reward,
+            loss=avg_loss,
+            threats_blocked=self.threats_blocked,
+            threats_allowed=self.threats_allowed
+        )
+        
+        # Reset for the next batch
+        self.current_epoch += 1
+        self.steps = 0
+        self.cumulative_reward = 0.0
+        self.threats_blocked = 0
+        self.threats_allowed = 0
+        self.losses = []
+
+epoch_tracker = EpochTracker(batch_size=100)
+# ---> END NEW CODE <---
+
 # Initialize Redis client for telemetry broadcasting
 try:
     redis_client = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
@@ -111,6 +159,10 @@ def process_packet(packet):
 
             state_vector = [0.0 if math.isnan(x) or math.isinf(x) else float(x) for x in state_vector]
             
+            # ---> NEW: CACHE STATE FOR HUMAN FEEDBACK LOOP <---
+            dqn_agent.state_cache[src_ip] = state_vector
+            # ---> END NEW CODE <---
+
             # Phase 5: DQN Inference
             action = dqn_agent.select_action(state_vector)
             confidence = getattr(dqn_agent, 'get_confidence', lambda x: 1.0)(state_vector)
@@ -122,15 +174,15 @@ def process_packet(packet):
             latency_penalty = -0.1 * processing_time_ms # -0.1 reward per millisecond 
             
             # --- THE REWARD FUNCTION ---
-            # Evaluate the action against the "ground truth" to determine the base reward [cite: 165]
+            # Evaluate the action against the "ground truth" to determine the base reward
             is_malicious = src_ip in KNOWN_MALICIOUS_IPS
             base_reward = 0.0
             
             if action == 1: # DROP
                 if is_malicious:
-                    base_reward = 10.0  # Strong positive reward for blocking known malware [cite: 167]
+                    base_reward = 10.0  # Strong positive reward for blocking known malware
                 else:
-                    base_reward = -50.0 # Massively asymmetric penalty for false positives [cite: 169]
+                    base_reward = -50.0 # Massively asymmetric penalty for false positives
             elif action == 0: # ACCEPT
                 if is_malicious:
                     base_reward = -20.0 # Penalty for failing to block an attack
@@ -159,8 +211,17 @@ def process_packet(packet):
                     done=1 if is_terminal else 0 
                 )
                 
-                dqn_agent.optimize_model()
+                # ---> NEW: RECORD METRICS FOR GRAPH <---
+                loss = dqn_agent.optimize_model()
                 
+                epoch_tracker.record_step(action, total_reward, loss)
+                
+                if epoch_tracker.is_ready():
+                    current_epsilon = dqn_agent.epsilon_end + (dqn_agent.epsilon_start - dqn_agent.epsilon_end) * \
+                                      math.exp(-1. * dqn_agent.steps_done / dqn_agent.epsilon_decay)
+                    epoch_tracker.flush(current_epsilon)
+                # ---> END NEW CODE <---
+
                 if dqn_agent.steps_done % 1000 == 0:
                     dqn_agent.update_target_network()
 
@@ -242,39 +303,30 @@ def handle_human_overrides():
                 # Default to 'ALLOW' so older "Revoke Block" buttons still work
                 decision = data.get('decision', 'ALLOW') 
                 
-                if override_ip and override_ip in blocked_states_cache:
-                    faulty_state = blocked_states_cache[override_ip]
-                    
+                if override_ip:
+                    # 1. Enforce the Rule immediately via iptables
                     if decision == 'ALLOW':
                         print(f"\n[!] ANALYST ALLOWED IP: {override_ip}")
-                        # 1. Lift the quarantine rate limit
                         rule_manager._remove_rule(override_ip)
-                        
-                        # 2. Punish the AI (It wanted to block legitimate traffic)
-                        dqn_agent.memory.push(
-                            state=faulty_state, action=1, reward=-100.0, next_state=faulty_state, done=1 
-                        )
-                        print(" -> Quarantine lifted. Model punished for false positive.")
-                        
                     elif decision == 'BLOCK':
                         print(f"\n[!] ANALYST BLOCKED IP: {override_ip}")
-                        # 1. Upgrade the quarantine rate limit to a hard block
                         rule_manager.deploy_block_rule(override_ip, duration_seconds=600)
-                        
-                        # 2. Reward the AI (It was unsure, but its instinct to block was correct)
-                        dqn_agent.memory.push(
-                            state=faulty_state, action=1, reward=50.0, next_state=faulty_state, done=1 
-                        )
-                        print(" -> Hard block applied. Model rewarded for catching threat.")
 
-                    # Trigger gradient descent to learn immediately
-                    dqn_agent.optimize_model()
+                    # ---> NEW: REWARD AI AND UPDATE GRAPH <---
+                    # 2. Force the AI to learn from the human's decision
+                    dqn_agent.apply_human_feedback(src_ip=override_ip, correct_action_label=decision)
                     
-                    # Clean up cache
-                    del blocked_states_cache[override_ip]
+                    # 3. Force the graph to dip/spike
+                    # -100 penalty if we had to ALLOW a false positive. +50 if we confirmed a BLOCK.
+                    reward_val = -100.0 if decision == 'ALLOW' else 50.0
+                    action_val = 0 if decision == 'ALLOW' else 1
+                    
+                    epoch_tracker.record_step(action=action_val, reward=reward_val, loss=None)
+                    # ---> END NEW CODE <---
                         
             except Exception as e:
                 print(f"Error processing override: {e}")
+
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup_iptables)
     signal.signal(signal.SIGTERM, cleanup_iptables)
