@@ -1,6 +1,7 @@
 import math
 import random
 import torch
+import os
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
@@ -20,6 +21,15 @@ class DQNAgent:
 
         # Online network and frozen target network.
         self.policy_net = FirewallDQN(input_dim, action_dim)
+
+        weight_path = "firewall_weights.pth"
+        if os.path.exists(weight_path):
+            print(f"[*] Loading pre-trained weights from {weight_path}")
+            # Assuming you are saving state_dicts, adjust if you save the whole model
+            self.policy_net.load_state_dict(torch.load(weight_path))
+        else:
+            print("[*] No existing weights found. Initializing fresh network.")
+
         self.target_net = FirewallDQN(input_dim, action_dim)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
@@ -111,4 +121,4 @@ class DQNAgent:
         for _ in range(5):
             self.replay(batch_size=32)
             
-        self.save("firewall_dqn_weights.h5")
+        self.save("firewall_weights.pth")

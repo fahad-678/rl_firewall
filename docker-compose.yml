@@ -16,6 +16,8 @@ services:
     depends_on:
       - redis
       - backend
+    volumes:
+      - ./agent:/app
 
   # 2. The Application Container (PHP-FPM / Laravel)
   backend:

@@ -149,8 +149,21 @@ def setup_iptables():
     subprocess.run(cmd.split(), check=True)
 
 def cleanup_iptables(signum, frame):
-    """Gracefully removes the iptables rule on shutdown."""
-    print("\nFlushing iptables rules and shutting down...")
+    """Gracefully removes the iptables rule and saves weights on shutdown."""
+    print("\n[!] Shutting down...")
+    
+    print("[*] Saving final model weights before exit...")
+    try:
+        if hasattr(dqn_agent, 'save'):
+            dqn_agent.save("firewall_weights.pth")
+        else:
+            import torch
+            torch.save(dqn_agent.policy_net.state_dict(), "firewall_weights.pth")
+        print("[*] Weights successfully saved.")
+    except Exception as e:
+        print(f"[!] Failed to save weights: {e}")
+
+    print("Flushing iptables rules...")
     cmd = f"iptables -D INPUT -p tcp --dport 80 -j NFQUEUE --queue-num {QUEUE_NUM}"
     subprocess.run(cmd.split(), check=False)
     sys.exit(0)
@@ -220,6 +233,16 @@ def process_packet(packet):
                 
                 if dqn_agent.steps_done % 1000 == 0:
                     dqn_agent.update_target_network()
+
+                    try:
+                        if hasattr(dqn_agent, 'save'):
+                            dqn_agent.save("firewall_weights.pth")
+                        else:
+                            import torch
+                            torch.save(dqn_agent.policy_net.state_dict(), "firewall_weights.pth")
+                        print(f"[*] Checkpoint reached (Step {dqn_agent.steps_done}): Model weights saved to disk.")
+                    except Exception as e:
+                        pass
 
             epoch_tracker.record_step(action, total_reward, loss_val)
             
