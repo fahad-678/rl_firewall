@@ -19,6 +19,7 @@ COPY . .
 RUN composer install --ignore-platform-reqs --no-interaction
 
 # Permissions
-RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
+RUN chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache && \
+    chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 
 CMD ["php-fpm"]

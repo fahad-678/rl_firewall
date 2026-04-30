@@ -60,6 +60,9 @@
             <span class="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full ring-2 ring-white"></span>
             <Bell class="w-5 h-5" />
           </button>
+          <button @click="handleLogout" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
+            Logout
+          </button>
         </div>
       </header>
 
@@ -76,6 +79,7 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { 
   LayoutDashboard, 
   Activity, 
@@ -85,6 +89,9 @@ import {
   X,
   Bell
 } from 'lucide-vue-next'
+import authService from '../services/authService.js'
+
+const router = useRouter()
 
 // Mobile menu state
 const isMobileMenuOpen = ref(false)
@@ -96,6 +103,12 @@ const navigation = [
   { name: 'Training History', href: '/training', icon: BrainCircuit },
   { name: 'Audit Logs', href: '/audit', icon: ClipboardList },
 ]
+
+// Handle logout
+const handleLogout = async () => {
+  await authService.logout()
+  router.push('/login')
+}
 </script>
 
 <style scoped>
