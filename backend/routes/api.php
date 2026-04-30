@@ -16,6 +16,7 @@ Route::middleware(['web', 'admin'])->group(function () {
     // Real-Time Firewall & Telemetry Routes
     Route::prefix('firewall')->group(function () {
         Route::get('/recent-telemetry', [FirewallController::class, 'getRecentTelemetry']);
+        Route::get('/telemetry', [FirewallController::class, 'getTelemetry']);
         Route::post('/telemetry', [FirewallController::class, 'receiveTelemetry']);
         
         // Human-in-the-loop actions

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Events\ThreatDetected;
 use App\Models\InterventionLog;
+use App\Models\TelemetryLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Redis;
 
@@ -26,10 +27,39 @@ class FirewallController extends Controller
             'terminal'     => 'nullable|boolean',
         ]);
 
+        // Persist raw telemetry for audit and historical queries
+        try {
+            TelemetryLog::create([
+                'src_ip'       => $validated['src_ip'],
+                'port'         => $validated['port'] ?? null,
+                'confidence'   => $validated['confidence'] ?? null,
+                'action'       => $validated['action'] ?? null,
+                'flow_key'     => $validated['flow_key'] ?? null,
+                'reward'       => $validated['reward'] ?? null,
+                'latency_ms'   => $validated['latency_ms'] ?? null,
+                'is_malicious' => $validated['is_malicious'] ?? null,
+                'terminal'     => $validated['terminal'] ?? null,
+                'raw_payload'  => $request->all(),
+            ]);
+        } catch (\Exception $e) {
+            // Do not block broadcasting on DB errors; log and continue
+            logger()->error('Failed to store telemetry: ' . $e->getMessage());
+        }
+
         // Broadcast the event instantly
         broadcast(new ThreatDetected($validated));
 
         return response()->json(['status' => 'Event broadcasted']);
+    }
+
+    /**
+     * Paginated historical telemetry records.
+     */
+    public function getTelemetry(Request $request)
+    {
+        $perPage = (int) $request->query('per_page', 25);
+        $logs = TelemetryLog::orderBy('created_at', 'desc')->paginate($perPage);
+        return response()->json($logs);
     }
 
     /**
