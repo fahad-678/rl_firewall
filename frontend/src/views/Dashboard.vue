@@ -1,149 +1,286 @@
 <template>
-  <div class="space-y-6 relative">
-    
+  <div class="relative space-y-6">
     <transition name="fade">
-      <div v-if="errorMessage" class="fixed bottom-4 right-4 bg-red-600 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 z-50">
-        <AlertTriangle class="w-5 h-5" />
+      <div
+        v-if="errorMessage"
+        class="fixed bottom-5 right-5 z-50 flex items-center gap-3 rounded-lg border border-rose-500/30 bg-rose-500/15 px-4 py-3 text-rose-100 shadow-lg"
+      >
+        <AlertTriangle class="h-5 w-5" />
         <span class="text-sm font-medium">{{ errorMessage }}</span>
       </div>
     </transition>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-200">
-        <div>
-          <p class="text-sm text-gray-500 font-medium">Total Threats Blocked</p>
-          <p class="text-3xl font-bold text-red-600 mt-2">{{ blockedCount }}</p>
-        </div>
-        <div class="p-3 bg-red-50 rounded-full text-red-600"><ShieldAlert /></div>
-      </div>
-      
-      <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-200">
-        <div>
-          <p class="text-sm text-gray-500 font-medium">Pending Analyst Review</p>
-          <p class="text-3xl font-bold text-yellow-600 mt-2">{{ pendingReviewCount }}</p>
-        </div>
-        <div class="p-3 bg-yellow-50 rounded-full text-yellow-600"><AlertTriangle /></div>
-      </div>
+    <section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 60ms">
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Active Queue</p>
+        <p class="mt-2 text-3xl font-semibold text-cyan-100">{{ filteredThreats.length }}</p>
+        <p class="mt-1 text-xs text-slate-400">Filtered incidents ready for analyst action</p>
+      </article>
 
-      <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between hover:-translate-y-1 hover:shadow-md transition-all duration-200">
+      <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 120ms">
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Blocked Threats</p>
+        <p class="mt-2 text-3xl font-semibold text-rose-300">{{ blockedCount }}</p>
+        <p class="mt-1 text-xs text-slate-400">Containment decisions enforced</p>
+      </article>
+
+      <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 180ms">
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Pending Review</p>
+        <p class="mt-2 text-3xl font-semibold text-amber-300">{{ pendingReviewCount }}</p>
+        <p class="mt-1 text-xs text-slate-400">Human-in-the-loop interventions required</p>
+      </article>
+
+      <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 240ms">
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Avg Confidence</p>
+        <p class="mt-2 text-3xl font-semibold text-emerald-300">{{ avgConfidence }}%</p>
+        <p class="mt-1 text-xs text-slate-400">Model certainty across visible queue</p>
+      </article>
+    </section>
+
+    <section class="soc-panel rounded-xl p-4 sm:p-5">
+      <div class="grid grid-cols-1 gap-3 lg:grid-cols-4">
         <div>
-          <p class="text-sm text-gray-500 font-medium">System Status</p>
-          <p class="text-xl font-bold text-green-600 mt-2 flex items-center gap-2">
-            <span class="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span> Active
-          </p>
+          <label class="text-xs uppercase tracking-[0.2em] text-slate-400">Action</label>
+          <select
+            v-model="filters.action"
+            class="mt-2 w-full rounded-lg border border-[var(--soc-border)] bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-0"
+          >
+            <option value="ALL">All Actions</option>
+            <option value="NEEDS_REVIEW">Needs Review</option>
+            <option value="BLOCKED">Blocked</option>
+            <option value="ACCEPTED">Accepted</option>
+            <option value="RATE_LIMITED">Rate Limited</option>
+          </select>
         </div>
-        <div class="p-3 bg-green-50 rounded-full text-green-600"><Activity /></div>
-      </div>
-    </div>
 
-    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-      <div class="p-6 border-b border-gray-100 flex justify-between items-center">
-        <h3 class="text-lg font-semibold text-gray-800">Live Threat Feed</h3>
-        <span class="text-xs font-medium text-gray-400">Monitoring Port Traffic...</span>
-      </div>
-      
-      <div class="overflow-x-auto min-h-[300px]">
-        <table class="w-full text-left border-collapse">
-          <thead>
-            <tr class="bg-gray-50 text-gray-600 text-sm border-b border-gray-100">
-              <th class="p-4 font-medium w-32">Timestamp</th>
-              <th class="p-4 font-medium">Source IP</th>
-              <th class="p-4 font-medium">Target Port</th>
-              <th class="p-4 font-medium w-48">AI Confidence</th>
-              <th class="p-4 font-medium w-40">Status</th>
-              <th class="p-4 font-medium w-48">Analyst Action</th>
-            </tr>
-          </thead>
-          
-          <transition-group name="list" tag="tbody" class="divide-y divide-gray-100 relative">
-            
-            <tr v-if="isLoading" key="loading-state">
-              <td colspan="6" class="p-8 text-center text-gray-400 text-sm animate-pulse">
-                Fetching recent telemetry...
-              </td>
-            </tr>
-            <tr v-else-if="threatLog.length === 0" key="empty-state">
-              <td colspan="6" class="p-8 text-center text-gray-400 text-sm">
-                No threats detected yet. Awaiting live telemetry...
-              </td>
-            </tr>
+        <div>
+          <label class="text-xs uppercase tracking-[0.2em] text-slate-400">Port</label>
+          <input
+            v-model="filters.port"
+            type="text"
+            placeholder="e.g. 22"
+            class="mt-2 w-full rounded-lg border border-[var(--soc-border)] bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+          />
+        </div>
 
-            <tr v-for="threat in threatLog" :key="threat.id || threat.timestamp || threat.src_ip + Math.random()" 
-                :class="[
-                  threat.action === 'NEEDS_REVIEW' ? 'bg-yellow-50/30' : 'hover:bg-gray-50',
-                  'transition-colors duration-200'
-                ]">
-              <td class="p-4 text-sm text-gray-500 whitespace-nowrap">{{ formatTime(new Date()) }}</td>
-              <td class="p-4 font-mono text-sm font-semibold text-gray-700">{{ threat.src_ip }}</td>
-              <td class="p-4 text-sm text-gray-600">{{ threat.port }}</td>
-              <td class="p-4">
-                <div class="flex items-center gap-3">
-                  <div class="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div :class="getConfidenceColor(threat.confidence)" 
-                         class="h-full transition-all duration-500 rounded-full" 
-                         :style="{ width: `${threat.confidence * 100}%` }"></div>
-                  </div>
-                  <span class="text-xs font-medium text-gray-600">{{ (threat.confidence * 100).toFixed(0) }}%</span>
+        <div>
+          <label class="text-xs uppercase tracking-[0.2em] text-slate-400">IP Contains</label>
+          <input
+            v-model="filters.ip"
+            type="text"
+            placeholder="192.168"
+            class="mt-2 w-full rounded-lg border border-[var(--soc-border)] bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+          />
+        </div>
+
+        <div class="flex items-end gap-3">
+          <button
+            @click="resetFilters"
+            class="w-full rounded-lg border border-[var(--soc-border)] px-4 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
+          >
+            Reset Filters
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-1 gap-6 xl:grid-cols-[1.6fr_1fr]">
+      <article class="soc-panel rounded-xl overflow-hidden">
+        <div class="border-b border-[var(--soc-border)] px-5 py-4">
+          <h3 class="text-lg font-semibold text-slate-100">Live Threat Queue</h3>
+          <p class="mt-1 text-xs text-slate-400">Streaming from firewall telemetry and intervention history</p>
+        </div>
+
+        <div class="max-h-[560px] overflow-y-auto">
+          <div v-if="isLoading" class="p-8 text-center text-sm text-slate-400">Synchronizing telemetry feed...</div>
+          <div v-else-if="filteredThreats.length === 0" class="p-8 text-center text-sm text-slate-400">No incidents match the current filters.</div>
+
+          <transition-group name="list" tag="div" class="divide-y divide-[var(--soc-border)]">
+            <button
+              v-for="threat in filteredThreats"
+              :key="threat.id"
+              @click="selectedThreatId = threat.id"
+              class="w-full px-5 py-4 text-left transition-colors"
+              :class="selectedThreatId === threat.id ? 'bg-cyan-500/10' : 'hover:bg-slate-800/50'"
+            >
+              <div class="flex items-start justify-between gap-4">
+                <div>
+                  <p class="font-mono text-sm font-semibold text-slate-100">{{ threat.src_ip }}</p>
+                  <p class="mt-1 text-xs text-slate-400">Port {{ threat.port ?? 'N/A' }} • {{ formatTime(threat.timestamp) }}</p>
                 </div>
-              </td>
-              <td class="p-4">
-              <span :class="getStatusBadge(threat.action)" class="px-3 py-1 text-xs font-semibold rounded-md inline-block">
-                {{ (threat.action || 'UNKNOWN').replace('_', ' ') }}
-              </span>
-            </td>
-              <td class="p-4">
-                <div v-if="threat.action === 'NEEDS_REVIEW'" class="flex gap-2">
-                  <button @click="submitReview(threat, 'BLOCK')" class="text-xs bg-red-600 text-white px-3 py-1.5 rounded-md hover:bg-red-700 shadow-sm transition transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-1">
-                    Block
-                  </button>
-                  <button @click="submitReview(threat, 'ALLOW')" class="text-xs bg-white border border-gray-200 text-gray-700 px-3 py-1.5 rounded-md hover:bg-gray-50 shadow-sm transition transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-2 focus:ring-gray-200 focus:ring-offset-1">
-                    Allow
-                  </button>
-                </div>
-                <button v-else-if="threat.action === 'BLOCKED'" @click="overrideBlock(threat.src_ip)" class="text-xs text-red-600 font-medium hover:text-red-800 underline underline-offset-2 transition focus:outline-none">
-                  Revoke Block
-                </button>
-                <span v-else class="text-xs text-gray-400 italic flex items-center gap-1">
-                  Resolved
+                <span :class="getStatusBadge(threat.action)" class="rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.07em]">
+                  {{ threat.actionLabel }}
                 </span>
-              </td>
-            </tr>
+              </div>
+
+              <div class="mt-3 flex items-center gap-3">
+                <div class="h-1.5 w-24 overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    :class="getConfidenceColor(threat.confidence)"
+                    class="h-full rounded-full transition-all duration-500"
+                    :style="{ width: `${threat.confidencePercent}%` }"
+                  ></div>
+                </div>
+                <p class="text-xs font-semibold text-slate-300">{{ threat.confidencePercent }}% confidence</p>
+              </div>
+            </button>
           </transition-group>
-        </table>
-      </div>
-    </div>
+        </div>
+      </article>
+
+      <article class="soc-panel rounded-xl p-5">
+        <h3 class="text-lg font-semibold text-slate-100">Incident Detail</h3>
+        <p class="mt-1 text-xs text-slate-400">Review context and trigger containment actions</p>
+
+        <div v-if="selectedThreat" class="mt-5 space-y-4">
+          <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-4">
+            <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Source IP</p>
+            <p class="mt-2 font-mono text-xl font-semibold text-slate-100">{{ selectedThreat.src_ip }}</p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-3">
+              <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Port</p>
+              <p class="mt-2 text-lg font-semibold text-slate-200">{{ selectedThreat.port ?? 'N/A' }}</p>
+            </div>
+            <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-3">
+              <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Confidence</p>
+              <p class="mt-2 text-lg font-semibold text-slate-200">{{ selectedThreat.confidencePercent }}%</p>
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-3">
+            <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Current Status</p>
+            <span :class="getStatusBadge(selectedThreat.action)" class="mt-2 inline-flex rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-[0.06em]">
+              {{ selectedThreat.actionLabel }}
+            </span>
+          </div>
+
+          <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-3">
+            <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Detected At</p>
+            <p class="mt-2 text-sm text-slate-200">{{ formatTime(selectedThreat.timestamp) }}</p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3 pt-2">
+            <button
+              @click="submitReview(selectedThreat, 'BLOCK')"
+              :disabled="selectedThreat.action !== 'NEEDS_REVIEW'"
+              class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Block Source
+            </button>
+            <button
+              @click="submitReview(selectedThreat, 'ALLOW')"
+              :disabled="selectedThreat.action !== 'NEEDS_REVIEW'"
+              class="rounded-lg border border-[var(--soc-border)] px-4 py-2 text-sm font-semibold text-slate-100 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Allow Source
+            </button>
+          </div>
+
+          <button
+            @click="overrideBlock(selectedThreat.src_ip)"
+            :disabled="selectedThreat.action !== 'BLOCKED'"
+            class="w-full rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-2 text-sm font-semibold text-amber-200 transition-colors hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Revoke Block
+          </button>
+        </div>
+
+        <div v-else class="mt-10 rounded-lg border border-dashed border-[var(--soc-border)] p-6 text-center text-sm text-slate-400">
+          Select an incident from the queue to review details and apply actions.
+        </div>
+      </article>
+    </section>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { ShieldAlert, AlertTriangle, Activity } from 'lucide-vue-next';
+import { AlertTriangle } from 'lucide-vue-next';
 import echo from '../services/echo';
 import axios from 'axios';
 
 // --- STATE ---
 const threatLog = ref([]);
 const errorMessage = ref('');
-const isLoading = ref(true); // Track initial data load
+const isLoading = ref(true);
+const selectedThreatId = ref(null);
+const filters = ref({
+  action: 'ALL',
+  port: '',
+  ip: ''
+});
+
+let fallbackId = 0;
 
 // --- COMPUTED ---
 const blockedCount = computed(() => threatLog.value.filter(t => t.action === 'BLOCKED').length);
 const pendingReviewCount = computed(() => threatLog.value.filter(t => t.action === 'NEEDS_REVIEW').length);
+const avgConfidence = computed(() => {
+  if (threatLog.value.length === 0) return 0;
+  const total = threatLog.value.reduce((sum, item) => sum + item.confidence, 0);
+  return Math.round((total / threatLog.value.length) * 100);
+});
+
+const filteredThreats = computed(() => {
+  return threatLog.value.filter((threat) => {
+    const actionMatch = filters.value.action === 'ALL' || threat.action === filters.value.action;
+    const portMatch = filters.value.port.trim() === '' || String(threat.port ?? '').includes(filters.value.port.trim());
+    const ipMatch = filters.value.ip.trim() === '' || String(threat.src_ip ?? '').includes(filters.value.ip.trim());
+    return actionMatch && portMatch && ipMatch;
+  });
+});
+
+const selectedThreat = computed(() => {
+  return threatLog.value.find((threat) => threat.id === selectedThreatId.value) || null;
+});
+
+const normalizeAction = (threat) => {
+  if (threat.action) return threat.action;
+  if (threat.decision === 'BLOCK') return 'BLOCKED';
+  if (threat.decision === 'ALLOW') return 'ACCEPTED';
+  return 'UNKNOWN';
+};
+
+const normalizeThreat = (threat) => {
+  const action = normalizeAction(threat);
+  const confidenceRaw = Number(threat.confidence);
+  const confidence = Number.isFinite(confidenceRaw)
+    ? confidenceRaw > 1 ? Math.min(confidenceRaw / 100, 1) : Math.max(confidenceRaw, 0)
+    : 0;
+
+  const id = threat.id || `${threat.src_ip || threat.ip_address || 'unknown'}-${threat.timestamp || threat.created_at || Date.now()}-${fallbackId++}`;
+  const srcIp = threat.src_ip || threat.ip_address || 'Unknown source';
+  const timestamp = threat.timestamp || threat.created_at || new Date().toISOString();
+
+  return {
+    ...threat,
+    id,
+    src_ip: srcIp,
+    action,
+    actionLabel: action.replace('_', ' '),
+    confidence,
+    confidencePercent: Math.round(confidence * 100),
+    timestamp
+  };
+};
+
+const resetFilters = () => {
+  filters.value.action = 'ALL';
+  filters.value.port = '';
+  filters.value.ip = '';
+};
 
 // --- LIFECYCLE & DATA HYDRATION ---
 const fetchInitialTelemetry = async () => {
   try {
     isLoading.value = true;
-    
-    // Fetch the last 50 threats from Laravel
     const response = await axios.get('/api/firewall/recent-telemetry');
-    
-    // Populate the array, ensuring unique IDs for the Vue transition-group animations
-    threatLog.value = response.data.map(threat => ({
-      ...threat,
-      id: threat.id || crypto.randomUUID()
-    }));
-    
+
+    threatLog.value = response.data.map((threat) => normalizeThreat(threat));
+    if (threatLog.value.length > 0) {
+      selectedThreatId.value = threatLog.value[0].id;
+    }
   } catch (error) {
     console.error("Failed to fetch historical telemetry", error);
     showError("Could not load recent threat history. Connecting to live feed only.");
@@ -153,21 +290,17 @@ const fetchInitialTelemetry = async () => {
 };
 
 onMounted(async () => {
-  // 1. Hydrate the dashboard with historical data first
   await fetchInitialTelemetry();
 
-  // 2. Attach WebSocket listener for real-time events
   echo.channel('firewall-telemetry')
       .listen('.threat.detected', (e) => {
-          const threat = {
-            ...e.telemetryData,
-            // Ensure new live rows get a unique ID
-            id: crypto.randomUUID() 
-          };
-          
+          const threat = normalizeThreat(e.telemetryData);
           threatLog.value.unshift(threat);
-          
-          // Enforce a maximum of 50 items in the UI memory
+
+          if (!selectedThreatId.value) {
+            selectedThreatId.value = threat.id;
+          }
+
           if (threatLog.value.length > 50) {
               threatLog.value.pop();
           }
@@ -176,7 +309,6 @@ onMounted(async () => {
 
 // --- UI HELPER FUNCTIONS ---
 const formatTime = (dateStringOrDate) => {
-  // Handle both backend ISO strings and frontend Date objects
   const date = typeof dateStringOrDate === 'string' ? new Date(dateStringOrDate) : dateStringOrDate;
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
@@ -188,13 +320,13 @@ const getConfidenceColor = (confidence) => {
 };
 
 const getStatusBadge = (action) => {
-  const baseClasses = 'px-3 py-1 text-xs font-semibold rounded-md inline-block';
+  const baseClasses = 'inline-flex items-center';
   switch (action) {
-    case 'BLOCKED': return `${baseClasses} bg-red-50 text-red-700 border border-red-100`;
-    case 'ACCEPTED': return `${baseClasses} bg-green-50 text-green-700 border border-green-100`;
-    case 'RATE_LIMITED': return `${baseClasses} bg-orange-50 text-orange-700 border border-orange-100`;
-    case 'NEEDS_REVIEW': return `${baseClasses} bg-yellow-50 text-yellow-800 animate-pulse border border-yellow-200`;
-    default: return `${baseClasses} bg-gray-100 text-gray-700`;
+    case 'BLOCKED': return `${baseClasses} border border-rose-400/40 bg-rose-500/15 text-rose-200`;
+    case 'ACCEPTED': return `${baseClasses} border border-emerald-400/40 bg-emerald-500/15 text-emerald-200`;
+    case 'RATE_LIMITED': return `${baseClasses} border border-amber-400/40 bg-amber-500/15 text-amber-200`;
+    case 'NEEDS_REVIEW': return `${baseClasses} border border-yellow-400/40 bg-yellow-400/15 text-yellow-200`;
+    default: return `${baseClasses} border border-slate-500/40 bg-slate-600/25 text-slate-200`;
   }
 };
 
@@ -206,9 +338,9 @@ const showError = (msg) => {
 // --- API ACTIONS ---
 const submitReview = async (threat, decision) => {
   const originalAction = threat.action;
-  
-  // Optimistic UI Update: Instantly change row status
+
   threat.action = decision === 'BLOCK' ? 'BLOCKED' : 'ACCEPTED';
+  threat.actionLabel = threat.action.replace('_', ' ');
 
   try {
     await axios.post('/api/firewall/review', { 
@@ -217,8 +349,8 @@ const submitReview = async (threat, decision) => {
     });
   } catch (error) {
     console.error("Failed to submit analyst review", error);
-    // CRITICAL FIX: Revert the UI state if the backend request fails
     threat.action = originalAction;
+    threat.actionLabel = threat.action.replace('_', ' ');
     showError(`Failed to apply decision for ${threat.src_ip}. Check network connection.`);
   }
 };
@@ -228,57 +360,43 @@ const overrideBlock = async (ipAddress) => {
   if (!threat) return;
 
   const originalAction = threat.action;
-  
-  // Optimistic UI Update
+
   threat.action = 'ACCEPTED';
+  threat.actionLabel = 'ACCEPTED';
 
   try {
     await axios.post('/api/firewall/override', { ip: ipAddress });
   } catch (error) {
     console.error("Failed to override block", error);
-    // Revert if failed
     threat.action = originalAction;
+    threat.actionLabel = threat.action.replace('_', ' ');
     showError(`Failed to revoke block for ${ipAddress}.`);
   }
 };
 </script>
 
 <style scoped>
-/* 1. Force the table to keep strict column widths so it doesn't jiggle */
-table {
-  table-layout: fixed;
-}
-
-/* 2. Speed up the transition so it finishes before the next packet arrives */
 .list-enter-active,
 .list-leave-active {
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.22s ease;
 }
 
-/* 3. Smooth slide down and fade in */
 .list-enter-from {
   opacity: 0;
-  transform: translateY(-10px);
-  background-color: #fefce8; /* Flash yellow */
+  transform: translateY(-8px);
 }
 
-/* 4. Simple fade out for leaving items */
 .list-leave-to {
   opacity: 0;
-  transform: scale(0.98);
+  transform: translateY(8px);
 }
-
-/* CRITICAL FIX: We completely removed .list-leave-active { position: absolute; } 
-   and .list-move. This stops the table rows from collapsing and overlapping! */
-
-/* Toast Animation (Keep this as is) */
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.3s ease, transform 0.3s ease;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
-  transform: translateY(10px);
+  transform: translateY(8px);
 }
 </style>

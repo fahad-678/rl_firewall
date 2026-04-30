@@ -1,75 +1,90 @@
 <template>
   <div class="space-y-6">
-    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-      <div class="p-6 border-b border-gray-100 flex items-center justify-between bg-white">
+    <section class="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <article class="soc-panel rounded-xl p-4">
+        <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Total Records</p>
+        <p class="mt-2 text-2xl font-semibold text-cyan-100">{{ pagination.total }}</p>
+      </article>
+      <article class="soc-panel rounded-xl p-4">
+        <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Block Decisions</p>
+        <p class="mt-2 text-2xl font-semibold text-rose-200">{{ blockDecisions }}</p>
+      </article>
+      <article class="soc-panel rounded-xl p-4">
+        <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Allow Decisions</p>
+        <p class="mt-2 text-2xl font-semibold text-emerald-200">{{ allowDecisions }}</p>
+      </article>
+    </section>
+
+    <div class="soc-panel overflow-hidden rounded-xl">
+      <div class="flex items-center justify-between border-b border-[var(--soc-border)] p-6">
         <div class="flex items-center gap-3">
-          <div class="p-2 bg-indigo-50 rounded-lg text-indigo-600">
+          <div class="rounded-lg bg-cyan-500/15 p-2 text-cyan-300">
             <ClipboardList class="w-5 h-5" />
           </div>
-          <h3 class="text-lg font-semibold text-gray-800">Analyst Audit Trail</h3>
+          <h3 class="text-lg font-semibold text-slate-100">Analyst Audit Trail</h3>
         </div>
-        <button @click="fetchAuditLogs" class="flex items-center gap-2 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors" :disabled="isLoading">
+        <button @click="fetchAuditLogs" class="flex items-center gap-2 rounded-lg border border-[var(--soc-border)] bg-slate-900/70 px-3 py-1.5 text-sm text-slate-200 transition-colors hover:bg-slate-800" :disabled="isLoading">
           <RefreshCw :class="{'animate-spin': isLoading}" class="w-4 h-4" />
           Refresh
         </button>
       </div>
 
-      <div v-if="error" class="p-6 text-red-500 text-sm flex items-center gap-2">
+      <div v-if="error" class="p-6 text-sm text-rose-300 flex items-center gap-2">
         <AlertCircle class="w-5 h-5" /> {{ error }}
       </div>
 
       <div class="overflow-x-auto">
         <table class="w-full text-left border-collapse">
           <thead>
-            <tr class="bg-gray-50 text-gray-600 text-sm border-b border-gray-200">
+            <tr class="border-b border-[var(--soc-border)] bg-slate-950/40 text-sm text-slate-300">
               <th class="p-4 font-medium">Timestamp</th>
               <th class="p-4 font-medium">Target IP</th>
               <th class="p-4 font-medium">Analyst Decision</th>
               <th class="p-4 font-medium">Notes</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-gray-100">
+          <tbody class="divide-y divide-[var(--soc-border)]">
             <tr v-if="isLoading && logs.length === 0">
-              <td colspan="4" class="p-8 text-center text-gray-400">Loading audit trail...</td>
+              <td colspan="4" class="p-8 text-center text-slate-400">Loading audit trail...</td>
             </tr>
             <tr v-else-if="logs.length === 0">
-              <td colspan="4" class="p-8 text-center text-gray-400">No human interventions recorded yet.</td>
+              <td colspan="4" class="p-8 text-center text-slate-400">No human interventions recorded yet.</td>
             </tr>
-            <tr v-for="log in logs" :key="log.id" class="hover:bg-gray-50 transition-colors">
-              <td class="p-4 text-sm text-gray-500">{{ new Date(log.created_at).toLocaleString() }}</td>
-              <td class="p-4 font-mono text-sm font-semibold text-gray-800">{{ log.ip_address }}</td>
+            <tr v-for="log in logs" :key="log.id" class="transition-colors hover:bg-slate-900/40">
+              <td class="p-4 text-sm text-slate-400">{{ new Date(log.created_at).toLocaleString() }}</td>
+              <td class="p-4 font-mono text-sm font-semibold text-slate-100">{{ log.ip_address }}</td>
               <td class="p-4">
                 <span :class="{
-                  'px-3 py-1 text-xs font-semibold rounded-full': true,
-                  'bg-red-100 text-red-700': log.decision === 'BLOCK',
-                  'bg-green-100 text-green-700': log.decision === 'ALLOW'
+                  'px-3 py-1 text-xs font-semibold rounded-md uppercase tracking-[0.08em]': true,
+                  'border border-rose-400/40 bg-rose-500/15 text-rose-200': log.decision === 'BLOCK',
+                  'border border-emerald-400/40 bg-emerald-500/15 text-emerald-200': log.decision === 'ALLOW'
                 }">
                   {{ log.decision }}
                 </span>
               </td>
-              <td class="p-4 text-sm text-gray-500 italic">
+              <td class="p-4 text-sm italic text-slate-400">
                 {{ log.notes || '—' }}
               </td>
             </tr>
           </tbody>
         </table>
-        <div v-if="pagination.lastPage > 1" class="p-4 border-t border-gray-100 flex items-center justify-between bg-gray-50">
-        <p class="text-sm text-gray-500">
-          Showing page <span class="font-medium text-gray-900">{{ pagination.currentPage }}</span> of <span class="font-medium text-gray-900">{{ pagination.lastPage }}</span>
+        <div v-if="pagination.lastPage > 1" class="p-4 border-t border-[var(--soc-border)] flex items-center justify-between bg-slate-950/40">
+        <p class="text-sm text-slate-400">
+          Showing page <span class="font-medium text-slate-100">{{ pagination.currentPage }}</span> of <span class="font-medium text-slate-100">{{ pagination.lastPage }}</span>
           ({{ pagination.total }} total records)
         </p>
         <div class="flex gap-2">
           <button 
             @click="changePage(pagination.currentPage - 1)" 
             :disabled="pagination.currentPage === 1"
-            class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            class="px-3 py-1.5 text-sm font-medium text-slate-200 bg-slate-900 border border-[var(--soc-border)] rounded-md hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
             Previous
           </button>
           <button 
             @click="changePage(pagination.currentPage + 1)" 
             :disabled="pagination.currentPage === pagination.lastPage"
-            class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            class="px-3 py-1.5 text-sm font-medium text-slate-200 bg-slate-900 border border-[var(--soc-border)] rounded-md hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
             Next
           </button>
@@ -81,7 +96,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import axios from 'axios'
 import { RefreshCw, AlertCircle, ClipboardList } from 'lucide-vue-next'
 
@@ -95,6 +110,9 @@ const pagination = ref({
   lastPage: 1,
   total: 0
 })
+
+const blockDecisions = computed(() => logs.value.filter(log => log.decision === 'BLOCK').length)
+const allowDecisions = computed(() => logs.value.filter(log => log.decision === 'ALLOW').length)
 
 const fetchAuditLogs = async (page = 1) => {
   isLoading.value = true

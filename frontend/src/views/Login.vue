@@ -1,28 +1,26 @@
 <template>
-  <div class="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
-    <div class="w-full max-w-md">
-      <!-- Header -->
-      <div class="text-center mb-8">
-        <h1 class="text-3xl font-bold tracking-wider text-blue-400 mb-2">RL FIREWALL</h1>
-        <p class="text-gray-600">Adaptive Threat Engine</p>
+  <div class="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-12 sm:px-6 lg:px-8">
+    <div class="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(63,140,255,0.3),transparent_35%),radial-gradient(circle_at_85%_15%,rgba(46,196,182,0.25),transparent_30%)]"></div>
+
+    <div class="relative z-10 w-full max-w-md">
+      <div class="mb-8 text-center">
+        <p class="text-xs uppercase tracking-[0.35em] text-cyan-300">Security Operations</p>
+        <h1 class="mt-3 text-4xl font-semibold tracking-[0.06em] text-slate-100">RL Firewall</h1>
+        <p class="mt-2 text-sm text-slate-400">Adaptive Threat Engine</p>
       </div>
 
-      <!-- Login Card -->
-      <div class="bg-white rounded-xl shadow-md border border-gray-100 p-8">
-        <h2 class="text-xl font-semibold text-gray-900 mb-6">Admin Login</h2>
+      <div class="soc-panel rounded-2xl p-8">
+        <h2 class="mb-6 text-xl font-semibold text-slate-100">Admin Login</h2>
 
-        <!-- Error Alert -->
         <transition name="fade">
-          <div v-if="errorMessage" class="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p class="text-sm text-red-700 font-medium">{{ errorMessage }}</p>
+          <div v-if="errorMessage" class="mb-6 rounded-lg border border-rose-500/30 bg-rose-500/15 p-4">
+            <p class="text-sm font-medium text-rose-200">{{ errorMessage }}</p>
           </div>
         </transition>
 
-        <!-- Form -->
         <form @submit.prevent="handleLogin" class="space-y-4">
-          <!-- Email Input -->
           <div>
-            <label for="email" class="block text-sm font-medium text-gray-700 mb-2">
+            <label for="email" class="mb-2 block text-sm font-medium text-slate-300">
               Email
             </label>
             <input
@@ -30,15 +28,14 @@
               v-model="form.email"
               type="email"
               required
-              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="w-full rounded-lg border border-[var(--soc-border)] bg-slate-900/70 px-4 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none"
               placeholder="admin@example.com"
               :disabled="isLoading"
             />
           </div>
 
-          <!-- Password Input -->
           <div>
-            <label for="password" class="block text-sm font-medium text-gray-700 mb-2">
+            <label for="password" class="mb-2 block text-sm font-medium text-slate-300">
               Password
             </label>
             <input
@@ -46,25 +43,23 @@
               v-model="form.password"
               type="password"
               required
-              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="w-full rounded-lg border border-[var(--soc-border)] bg-slate-900/70 px-4 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none"
               placeholder="••••••••"
               :disabled="isLoading"
             />
           </div>
 
-          <!-- Submit Button -->
           <button
             type="submit"
             :disabled="isLoading"
-            class="w-full px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors duration-200 mt-6"
+            class="mt-6 w-full rounded-lg bg-cyan-500 px-4 py-2 font-semibold text-slate-950 transition-colors duration-200 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-500"
           >
             <span v-if="!isLoading">Sign In</span>
-            <span v-else>Loading...</span>
+            <span v-else>Authenticating...</span>
           </button>
         </form>
 
-        <!-- Info Text -->
-        <p class="text-center text-xs text-gray-500 mt-6">
+        <p class="mt-6 text-center text-xs text-slate-400">
           This is the admin dashboard. Use your admin credentials to proceed.
         </p>
       </div>
@@ -125,7 +120,7 @@ const handleLogin = async () => {
 <style scoped>
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.3s ease;
+  transition: opacity 0.2s ease;
 }
 
 .fade-enter-from,
