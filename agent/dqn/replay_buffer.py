@@ -4,7 +4,7 @@ import torch
 
 class ExperienceReplay:
     def __init__(self, capacity=10000):
-        # A circular buffer to hold recent transitions
+        # Fixed-size buffer of recent transitions.
         self.memory = deque(maxlen=capacity)
 
     def push(self, state, action, reward, next_state, done):
@@ -14,8 +14,6 @@ class ExperienceReplay:
     def sample(self, batch_size):
         """Returns a randomized mini-batch of transitions."""
         transitions = random.sample(self.memory, batch_size)
-        
-        # Unzip the batch into separate lists
         states, actions, rewards, next_states, dones = zip(*transitions)
         
         return (
