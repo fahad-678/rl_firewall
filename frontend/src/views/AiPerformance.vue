@@ -1,38 +1,63 @@
 <template>
-  <div class="space-y-5">
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+  <div class="space-y-6">
+    <section class="soc-panel rounded-2xl p-5 sm:p-6">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p class="text-xs uppercase tracking-[0.32em] text-[var(--soc-accent)]">Learning Analytics</p>
+          <h2 class="mt-2 text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">Reward signal over time</h2>
+          <p class="mt-2 max-w-2xl text-sm text-slate-400">
+            Monitor how the firewall policy converges as analysts confirm blocks and allow exceptions.
+          </p>
+        </div>
+
+        <button
+          @click="fetchData"
+          class="rounded-xl border border-[var(--soc-border)] bg-slate-900/70 px-4 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
+        >
+          Refresh Data
+        </button>
+      </div>
+    </section>
+
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <article class="soc-panel rounded-xl p-4">
         <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Latest Reward</p>
         <p class="mt-2 text-2xl font-semibold text-cyan-100">{{ latestReward }}</p>
+        <p class="mt-1 text-xs text-slate-400">Most recent training epoch</p>
       </article>
       <article class="soc-panel rounded-xl p-4">
         <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Best Reward</p>
         <p class="mt-2 text-2xl font-semibold text-emerald-200">{{ bestReward }}</p>
+        <p class="mt-1 text-xs text-slate-400">Peak cumulative reward</p>
       </article>
       <article class="soc-panel rounded-xl p-4">
         <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Reward Delta</p>
         <p class="mt-2 text-2xl font-semibold" :class="rewardDelta >= 0 ? 'text-emerald-200' : 'text-rose-200'">
           {{ rewardDelta >= 0 ? '+' : '' }}{{ rewardDelta }}
         </p>
+        <p class="mt-1 text-xs text-slate-400">Change vs. previous epoch</p>
+      </article>
+      <article class="soc-panel rounded-xl p-4">
+        <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Average Reward</p>
+        <p class="mt-2 text-2xl font-semibold text-sky-200">{{ averageReward }}</p>
+        <p class="mt-1 text-xs text-slate-400">Rolling mean across loaded history</p>
       </article>
     </div>
 
-    <div class="soc-panel rounded-xl p-6">
-      <div class="mb-6 flex items-center justify-between">
+    <div class="soc-panel rounded-2xl p-5 sm:p-6">
+      <div class="mb-5 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h3 class="text-lg font-semibold text-slate-100">DQN Reward Curve</h3>
           <p class="mt-1 text-sm text-slate-400">Cumulative reward trajectory across recent training epochs</p>
         </div>
-        <button
-          @click="fetchData"
-          class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 px-3 py-1.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
-        >
-          Refresh Data
-        </button>
+        <div class="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-slate-400">
+          <span class="rounded-full border border-[var(--soc-border)] bg-slate-950/50 px-3 py-1">{{ learningMomentum }} momentum</span>
+          <span class="rounded-full border border-[var(--soc-border)] bg-slate-950/50 px-3 py-1">{{ rewardValues.length }} epochs</span>
+        </div>
       </div>
 
       <div class="relative h-80 w-full">
-        <div v-if="isLoading" class="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/40 backdrop-blur-sm">
+        <div v-if="isLoading" class="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-slate-950/40 backdrop-blur-sm">
           <span class="animate-pulse text-sm font-medium text-slate-300">Aggregating training telemetry...</span>
         </div>
         <Line v-if="chartData.labels.length > 0" :data="chartData" :options="chartOptions" />
@@ -85,12 +110,12 @@ const chartOptions = {
 
 const latestReward = computed(() => {
   if (rewardValues.value.length === 0) return 'N/A'
-  return rewardValues.value[rewardValues.value.length - 1]
+  return Number(rewardValues.value[rewardValues.value.length - 1]).toFixed(2)
 })
 
 const bestReward = computed(() => {
   if (rewardValues.value.length === 0) return 'N/A'
-  return Math.max(...rewardValues.value)
+  return Math.max(...rewardValues.value).toFixed(2)
 })
 
 const rewardDelta = computed(() => {
@@ -98,6 +123,23 @@ const rewardDelta = computed(() => {
   const current = rewardValues.value[rewardValues.value.length - 1]
   const previous = rewardValues.value[rewardValues.value.length - 2]
   return Number((current - previous).toFixed(2))
+})
+
+const averageReward = computed(() => {
+  if (rewardValues.value.length === 0) return 'N/A'
+  const total = rewardValues.value.reduce((sum, value) => sum + Number(value), 0)
+  return (total / rewardValues.value.length).toFixed(2)
+})
+
+const learningMomentum = computed(() => {
+  if (rewardValues.value.length < 4) return 'stable'
+
+  const recent = rewardValues.value.slice(-4)
+  const slope = recent[recent.length - 1] - recent[0]
+
+  if (slope > 0) return 'upward'
+  if (slope < 0) return 'downward'
+  return 'stable'
 })
 
 const fetchData = async () => {
@@ -113,11 +155,11 @@ const fetchData = async () => {
         {
           label: 'Reward Signal',
           data: rewardValues.value,
-          borderColor: '#2ec4b6',
-          backgroundColor: 'rgba(46, 196, 182, 0.14)',
+          borderColor: '#3dd6c6',
+          backgroundColor: 'rgba(61, 214, 198, 0.12)',
           borderWidth: 2.5,
-          pointBackgroundColor: '#0f172a',
-          pointBorderColor: '#2ec4b6',
+          pointBackgroundColor: '#09131b',
+          pointBorderColor: '#3dd6c6',
           pointRadius: 4,
           pointHoverRadius: 6,
           fill: true,

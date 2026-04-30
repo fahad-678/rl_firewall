@@ -1,5 +1,32 @@
 <template>
   <div class="relative space-y-6">
+    <section class="soc-panel rounded-2xl p-5 sm:p-6">
+      <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div class="space-y-2">
+          <p class="text-xs uppercase tracking-[0.32em] text-[var(--soc-accent)]">Adaptive Defense Console</p>
+          <h2 class="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">RL Firewall live triage</h2>
+          <p class="max-w-2xl text-sm leading-6 text-slate-400">
+            Review active incidents, tune responses, and feed analyst decisions back into the policy engine.
+          </p>
+        </div>
+
+        <div class="grid gap-3 sm:grid-cols-3">
+          <div class="rounded-xl border border-[var(--soc-border)] bg-slate-950/45 px-4 py-3">
+            <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400">Model</p>
+            <p class="mt-2 text-sm font-semibold text-slate-100">DQN policy loop</p>
+          </div>
+          <div class="rounded-xl border border-[var(--soc-border)] bg-slate-950/45 px-4 py-3">
+            <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400">Telemetry</p>
+            <p class="mt-2 text-sm font-semibold text-emerald-300">Connected</p>
+          </div>
+          <div class="rounded-xl border border-[var(--soc-border)] bg-slate-950/45 px-4 py-3">
+            <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400">Learning</p>
+            <p class="mt-2 text-sm font-semibold text-cyan-200">Human-in-the-loop</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <transition name="fade">
       <div
         v-if="errorMessage"
@@ -10,7 +37,7 @@
       </div>
     </transition>
 
-    <section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
       <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 60ms">
         <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Active Queue</p>
         <p class="mt-2 text-3xl font-semibold text-cyan-100">{{ filteredThreats.length }}</p>
@@ -33,6 +60,12 @@
         <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Avg Confidence</p>
         <p class="mt-2 text-3xl font-semibold text-emerald-300">{{ avgConfidence }}%</p>
         <p class="mt-1 text-xs text-slate-400">Model certainty across visible queue</p>
+      </article>
+
+      <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 300ms">
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Avg Latency</p>
+        <p class="mt-2 text-3xl font-semibold text-sky-200">{{ avgLatency }}ms</p>
+        <p class="mt-1 text-xs text-slate-400">Processing time across visible telemetry</p>
       </article>
     </section>
 
@@ -122,6 +155,21 @@
                 </div>
                 <p class="text-xs font-semibold text-slate-300">{{ threat.confidencePercent }}% confidence</p>
               </div>
+
+              <div class="mt-3 grid grid-cols-2 gap-3 text-[11px] text-slate-400 sm:grid-cols-4">
+                <div class="rounded-md border border-[var(--soc-border)] bg-slate-950/40 px-2 py-1.5">
+                  <span class="uppercase tracking-[0.14em] text-slate-500">Reward</span>
+                  <p class="mt-1 font-semibold text-slate-200">{{ formatSignedNumber(threat.reward) }}</p>
+                </div>
+                <div class="rounded-md border border-[var(--soc-border)] bg-slate-950/40 px-2 py-1.5">
+                  <span class="uppercase tracking-[0.14em] text-slate-500">Latency</span>
+                  <p class="mt-1 font-semibold text-slate-200">{{ formatLatency(threat.latency_ms) }}</p>
+                </div>
+                <div class="rounded-md border border-[var(--soc-border)] bg-slate-950/40 px-2 py-1.5 sm:col-span-2">
+                  <span class="uppercase tracking-[0.14em] text-slate-500">Flow</span>
+                  <p class="mt-1 truncate font-mono font-semibold text-slate-200">{{ threat.flow_key || 'Live packet' }}</p>
+                </div>
+              </div>
             </button>
           </transition-group>
         </div>
@@ -155,9 +203,35 @@
             </span>
           </div>
 
+          <div class="grid grid-cols-2 gap-3">
+            <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-3">
+              <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Reward</p>
+              <p class="mt-2 text-lg font-semibold text-slate-200">{{ formatSignedNumber(selectedThreat.reward) }}</p>
+            </div>
+            <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-3">
+              <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Latency</p>
+              <p class="mt-2 text-lg font-semibold text-slate-200">{{ formatLatency(selectedThreat.latency_ms) }}</p>
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-3">
+            <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Flow Key</p>
+            <p class="mt-2 break-all font-mono text-sm text-slate-200">{{ selectedThreat.flow_key || 'Not available' }}</p>
+          </div>
+
           <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-3">
             <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Detected At</p>
             <p class="mt-2 text-sm text-slate-200">{{ formatTime(selectedThreat.timestamp) }}</p>
+          </div>
+
+          <div class="rounded-lg border border-[var(--soc-border)] bg-slate-900/70 p-3">
+            <label class="text-xs uppercase tracking-[0.2em] text-slate-400">Analyst Notes</label>
+            <textarea
+              v-model="noteDraft"
+              rows="3"
+              placeholder="Optional note for audit trail and feedback loop"
+              class="mt-2 w-full rounded-lg border border-[var(--soc-border)] bg-slate-950/80 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:ring-0"
+            ></textarea>
           </div>
 
           <div class="grid grid-cols-2 gap-3 pt-2">
@@ -195,7 +269,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { AlertTriangle } from 'lucide-vue-next';
 import echo from '../services/echo';
 import axios from 'axios';
@@ -205,6 +279,7 @@ const threatLog = ref([]);
 const errorMessage = ref('');
 const isLoading = ref(true);
 const selectedThreatId = ref(null);
+const noteDraft = ref('');
 const filters = ref({
   action: 'ALL',
   port: '',
@@ -216,6 +291,15 @@ let fallbackId = 0;
 // --- COMPUTED ---
 const blockedCount = computed(() => threatLog.value.filter(t => t.action === 'BLOCKED').length);
 const pendingReviewCount = computed(() => threatLog.value.filter(t => t.action === 'NEEDS_REVIEW').length);
+const avgLatency = computed(() => {
+  const values = threatLog.value
+    .map(t => Number(t.latency_ms))
+    .filter(value => Number.isFinite(value));
+
+  if (values.length === 0) return '0.0';
+
+  return (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1);
+});
 const avgConfidence = computed(() => {
   if (threatLog.value.length === 0) return 0;
   const total = threatLog.value.reduce((sum, item) => sum + item.confidence, 0);
@@ -235,6 +319,21 @@ const selectedThreat = computed(() => {
   return threatLog.value.find((threat) => threat.id === selectedThreatId.value) || null;
 });
 
+watch(selectedThreat, (threat) => {
+  noteDraft.value = threat?.notes || '';
+}, { immediate: true });
+
+watch(filteredThreats, (threats) => {
+  if (!threats.length) {
+    selectedThreatId.value = null;
+    return;
+  }
+
+  if (!threats.some((threat) => threat.id === selectedThreatId.value)) {
+    selectedThreatId.value = threats[0].id;
+  }
+}, { immediate: true });
+
 const normalizeAction = (threat) => {
   if (threat.action) return threat.action;
   if (threat.decision === 'BLOCK') return 'BLOCKED';
@@ -248,6 +347,8 @@ const normalizeThreat = (threat) => {
   const confidence = Number.isFinite(confidenceRaw)
     ? confidenceRaw > 1 ? Math.min(confidenceRaw / 100, 1) : Math.max(confidenceRaw, 0)
     : 0;
+  const rewardRaw = Number(threat.reward);
+  const latencyRaw = Number(threat.latency_ms);
 
   const id = threat.id || `${threat.src_ip || threat.ip_address || 'unknown'}-${threat.timestamp || threat.created_at || Date.now()}-${fallbackId++}`;
   const srcIp = threat.src_ip || threat.ip_address || 'Unknown source';
@@ -261,6 +362,10 @@ const normalizeThreat = (threat) => {
     actionLabel: action.replace('_', ' '),
     confidence,
     confidencePercent: Math.round(confidence * 100),
+    reward: Number.isFinite(rewardRaw) ? rewardRaw : null,
+    latency_ms: Number.isFinite(latencyRaw) ? latencyRaw : null,
+    notes: threat.notes || '',
+    flow_key: threat.flow_key || '',
     timestamp
   };
 };
@@ -319,6 +424,17 @@ const getConfidenceColor = (confidence) => {
   return 'bg-red-400';
 };
 
+const formatLatency = (value) => {
+  if (value === null || value === undefined || value === '') return 'N/A';
+  return `${Number(value).toFixed(1)} ms`;
+};
+
+const formatSignedNumber = (value) => {
+  if (value === null || value === undefined || value === '') return 'N/A';
+  const numericValue = Number(value);
+  return `${numericValue >= 0 ? '+' : ''}${numericValue.toFixed(2)}`;
+};
+
 const getStatusBadge = (action) => {
   const baseClasses = 'inline-flex items-center';
   switch (action) {
@@ -345,7 +461,13 @@ const submitReview = async (threat, decision) => {
   try {
     await axios.post('/api/firewall/review', { 
       ip: threat.src_ip, 
-      decision: decision 
+      decision,
+      notes: noteDraft.value.trim() || `Manual ${decision.toLowerCase()} decision from dashboard`,
+      port: threat.port,
+      confidence: threat.confidence,
+      reward: threat.reward,
+      latency_ms: threat.latency_ms,
+      flow_key: threat.flow_key,
     });
   } catch (error) {
     console.error("Failed to submit analyst review", error);
@@ -365,7 +487,15 @@ const overrideBlock = async (ipAddress) => {
   threat.actionLabel = 'ACCEPTED';
 
   try {
-    await axios.post('/api/firewall/override', { ip: ipAddress });
+    await axios.post('/api/firewall/override', {
+      ip: ipAddress,
+      notes: noteDraft.value.trim() || 'Operator revoked block from dashboard',
+      port: threat.port,
+      confidence: threat.confidence,
+      reward: threat.reward,
+      latency_ms: threat.latency_ms,
+      flow_key: threat.flow_key,
+    });
   } catch (error) {
     console.error("Failed to override block", error);
     threat.action = originalAction;

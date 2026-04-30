@@ -131,14 +131,15 @@ def telemetry_worker():
 
 threading.Thread(target=telemetry_worker, daemon=True).start()
 
-def send_realtime_telemetry(src_ip, port, confidence, action):
+def send_realtime_telemetry(src_ip, port, confidence, action, **extra_fields):
     """Adds telemetry to the queue if the queue isn't full."""
     if not telemetry_queue.full(): 
         payload = {
             "src_ip": src_ip,
             "port": int(port),
             "confidence": float(confidence),
-            "action": action
+            "action": action,
+            **extra_fields,
         }
         telemetry_queue.put_nowait(payload)
         
@@ -285,11 +286,31 @@ def process_packet(packet):
                 packet.accept() 
                 status = "RATE_LIMITED"
                 
-            send_realtime_telemetry(src_ip, dst_port, confidence, status)
+            send_realtime_telemetry(
+                src_ip,
+                dst_port,
+                confidence,
+                status,
+                flow_key=flow_key,
+                reward=float(total_reward),
+                latency_ms=float(processing_time_ms),
+                is_malicious=is_malicious,
+                terminal=is_terminal,
+            )
             
             if redis_client:
-                telemetry_data = f'{{"src_ip": "{src_ip}", "port": {dst_port}, "action": "{status}", "confidence": {confidence:.4f}, "reward": {total_reward:.2f}, "latency_ms": {processing_time_ms:.2f}}}'
-                redis_client.publish('firewall-telemetry', telemetry_data)
+                telemetry_data = {
+                    "src_ip": src_ip,
+                    "port": int(dst_port),
+                    "action": status,
+                    "confidence": float(confidence),
+                    "reward": float(total_reward),
+                    "latency_ms": float(processing_time_ms),
+                    "flow_key": flow_key,
+                    "is_malicious": is_malicious,
+                    "terminal": is_terminal,
+                }
+                redis_client.publish('firewall-telemetry', json.dumps(telemetry_data))
                 
                 print(f"[AI] Evaluated IP {src_ip} -> {status} (Reward: {total_reward:.2f})", flush=True)
                 

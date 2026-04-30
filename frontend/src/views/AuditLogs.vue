@@ -1,6 +1,6 @@
 <template>
   <div class="space-y-6">
-    <section class="grid grid-cols-1 gap-4 md:grid-cols-3">
+    <section class="grid grid-cols-1 gap-4 md:grid-cols-4">
       <article class="soc-panel rounded-xl p-4">
         <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Total Records</p>
         <p class="mt-2 text-2xl font-semibold text-cyan-100">{{ pagination.total }}</p>
@@ -13,15 +13,22 @@
         <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Allow Decisions</p>
         <p class="mt-2 text-2xl font-semibold text-emerald-200">{{ allowDecisions }}</p>
       </article>
+      <article class="soc-panel rounded-xl p-4">
+        <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Reviewed Notes</p>
+        <p class="mt-2 text-2xl font-semibold text-sky-200">{{ notedDecisions }}</p>
+      </article>
     </section>
 
-    <div class="soc-panel overflow-hidden rounded-xl">
-      <div class="flex items-center justify-between border-b border-[var(--soc-border)] p-6">
+    <div class="soc-panel overflow-hidden rounded-2xl">
+      <div class="flex flex-col gap-3 border-b border-[var(--soc-border)] p-6 lg:flex-row lg:items-center lg:justify-between">
         <div class="flex items-center gap-3">
           <div class="rounded-lg bg-cyan-500/15 p-2 text-cyan-300">
             <ClipboardList class="w-5 h-5" />
           </div>
-          <h3 class="text-lg font-semibold text-slate-100">Analyst Audit Trail</h3>
+          <div>
+            <p class="text-xs uppercase tracking-[0.32em] text-[var(--soc-accent)]">Compliance</p>
+            <h3 class="mt-1 text-lg font-semibold text-slate-100">Analyst audit trail</h3>
+          </div>
         </div>
         <button @click="fetchAuditLogs" class="flex items-center gap-2 rounded-lg border border-[var(--soc-border)] bg-slate-900/70 px-3 py-1.5 text-sm text-slate-200 transition-colors hover:bg-slate-800" :disabled="isLoading">
           <RefreshCw :class="{'animate-spin': isLoading}" class="w-4 h-4" />
@@ -40,15 +47,16 @@
               <th class="p-4 font-medium">Timestamp</th>
               <th class="p-4 font-medium">Target IP</th>
               <th class="p-4 font-medium">Analyst Decision</th>
+              <th class="p-4 font-medium">Context</th>
               <th class="p-4 font-medium">Notes</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-[var(--soc-border)]">
             <tr v-if="isLoading && logs.length === 0">
-              <td colspan="4" class="p-8 text-center text-slate-400">Loading audit trail...</td>
+              <td colspan="5" class="p-8 text-center text-slate-400">Loading audit trail...</td>
             </tr>
             <tr v-else-if="logs.length === 0">
-              <td colspan="4" class="p-8 text-center text-slate-400">No human interventions recorded yet.</td>
+              <td colspan="5" class="p-8 text-center text-slate-400">No human interventions recorded yet.</td>
             </tr>
             <tr v-for="log in logs" :key="log.id" class="transition-colors hover:bg-slate-900/40">
               <td class="p-4 text-sm text-slate-400">{{ new Date(log.created_at).toLocaleString() }}</td>
@@ -61,6 +69,12 @@
                 }">
                   {{ log.decision }}
                 </span>
+              </td>
+              <td class="p-4 text-sm text-slate-300">
+                <div class="space-y-1">
+                  <p>{{ describeContext(log) }}</p>
+                  <p class="font-mono text-[11px] text-slate-500">{{ log.flow_key || 'No flow key captured' }}</p>
+                </div>
               </td>
               <td class="p-4 text-sm italic text-slate-400">
                 {{ log.notes || '—' }}
@@ -113,6 +127,7 @@ const pagination = ref({
 
 const blockDecisions = computed(() => logs.value.filter(log => log.decision === 'BLOCK').length)
 const allowDecisions = computed(() => logs.value.filter(log => log.decision === 'ALLOW').length)
+const notedDecisions = computed(() => logs.value.filter(log => Boolean(log.notes)).length)
 
 const fetchAuditLogs = async (page = 1) => {
   isLoading.value = true
@@ -143,6 +158,25 @@ const changePage = (newPage) => {
   if (newPage >= 1 && newPage <= pagination.value.lastPage) {
     fetchAuditLogs(newPage)
   }
+}
+
+const describeContext = (log) => {
+  const parts = []
+
+  if (log.port !== null && log.port !== undefined) {
+    parts.push(`Port ${log.port}`)
+  }
+
+  if (log.confidence !== null && log.confidence !== undefined) {
+    const confidence = Number(log.confidence)
+    parts.push(`Confidence ${(confidence <= 1 ? confidence * 100 : confidence).toFixed(1)}%`)
+  }
+
+  if (log.action) {
+    parts.push(log.action.replace('_', ' '))
+  }
+
+  return parts.length > 0 ? parts.join(' • ') : 'Manual intervention'
 }
 
 onMounted(() => {

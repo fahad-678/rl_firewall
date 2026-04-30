@@ -25,8 +25,7 @@ class DQNAgent:
         weight_path = "firewall_weights.pth"
         if os.path.exists(weight_path):
             print(f"[*] Loading pre-trained weights from {weight_path}")
-            # Assuming you are saving state_dicts, adjust if you save the whole model
-            self.policy_net.load_state_dict(torch.load(weight_path))
+            self.policy_net.load_state_dict(torch.load(weight_path, map_location="cpu"))
         else:
             print("[*] No existing weights found. Initializing fresh network.")
 
@@ -75,12 +74,19 @@ class DQNAgent:
         self.optimizer.zero_grad()
         loss.backward()
         for param in self.policy_net.parameters():
-            param.grad.data.clamp_(-1, 1)
+            if param.grad is not None:
+                param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
+
+        return float(loss.item())
 
     def update_target_network(self):
         """Synchronizes the frozen target network with the primary network."""
         self.target_net.load_state_dict(self.policy_net.state_dict())
+
+    def save(self, path="firewall_weights.pth"):
+        """Persists the current policy network weights."""
+        torch.save(self.policy_net.state_dict(), path)
     
     def get_confidence(self, state_vector, temperature=2.0):
         """
@@ -100,7 +106,7 @@ class DQNAgent:
         """
         Applies analyst feedback as high-priority replay samples.
         """
-        action_map = {'ALLOW': 0, 'BLOCK': 1, 'RATE_LIMIT': 2, 'NEEDS_REVIEW': 3}
+        action_map = {'ALLOW': 0, 'BLOCK': 1, 'RATE_LIMIT': 2}
         correct_action = action_map.get(correct_action_label.upper())
         original_action = action_map.get(original_action_label.upper()) if original_action_label else None
 
@@ -111,14 +117,18 @@ class DQNAgent:
             return
 
         # Bias replay toward analyst-confirmed corrections.
-        self.memory.add(state, correct_action, reward=100.0, next_state=state, done=True)
+        positive_reward = 12.0 if correct_action == 1 else 6.0
+        self.memory.push(state, correct_action, reward=positive_reward, next_state=state, done=True)
         
         if original_action is not None and original_action != correct_action:
-            self.memory.add(state, original_action, reward=-100.0, next_state=state, done=True)
+            self.memory.push(state, original_action, reward=-12.0, next_state=state, done=True)
 
         print(f"[*] Human Override: Adjusting neural weights for {src_ip} pattern -> {correct_action_label}")
         
-        for _ in range(5):
-            self.replay(batch_size=32)
-            
+        for _ in range(4):
+            loss = self.optimize_model()
+            if loss is not None and self.steps_done % 500 == 0:
+                self.update_target_network()
+
+        self.update_target_network()
         self.save("firewall_weights.pth")

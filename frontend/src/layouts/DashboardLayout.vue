@@ -17,20 +17,30 @@
       <div class="border-b border-[var(--soc-border)] p-6">
         <div class="flex items-center justify-between">
           <div>
-            <p class="text-xs uppercase tracking-[0.35em] text-[var(--soc-accent)]">Operations Grid</p>
-            <h1 class="mt-2 text-2xl font-semibold tracking-wide text-slate-100">RL Firewall</h1>
-            <p class="soc-muted mt-1 text-xs">Adaptive Threat Engine</p>
+            <p class="text-xs uppercase tracking-[0.35em] text-[var(--soc-accent)]">Autonomous Firewall</p>
+            <h1 class="mt-2 text-2xl font-semibold tracking-wide text-slate-50">RL Firewall</h1>
+            <p class="soc-muted mt-1 text-xs">Adaptive policy engine with analyst feedback</p>
           </div>
           <button @click="isMobileMenuOpen = false" class="text-slate-300 hover:text-white md:hidden">
             <X class="h-5 w-5" />
           </button>
         </div>
 
-        <div class="mt-5 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
-          <p class="text-xs uppercase tracking-[0.25em] text-emerald-300">System Link</p>
-          <div class="mt-2 flex items-center gap-2 text-sm font-medium text-emerald-200">
+        <div class="mt-5 grid gap-3">
+          <div class="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
+            <p class="text-xs uppercase tracking-[0.25em] text-emerald-300">Telemetry</p>
+            <div class="mt-2 flex items-center gap-2 text-sm font-medium text-emerald-200">
+              <span class="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_14px_rgba(16,185,129,0.8)]"></span>
+              Live feed active
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3">
+            <p class="text-xs uppercase tracking-[0.25em] text-cyan-300">Learning</p>
+            <div class="mt-2 flex items-center gap-2 text-sm font-medium text-cyan-100">
             <span class="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_14px_rgba(16,185,129,0.8)]"></span>
-            Telemetry Active
+              DQN policy loop
+            </div>
           </div>
         </div>
       </div>
@@ -78,7 +88,7 @@
 
         <div class="flex items-center gap-3">
           <div class="hidden rounded-lg border border-[var(--soc-border)] bg-slate-900/60 px-3 py-1.5 text-xs text-slate-300 sm:block">
-            Live Queue: <span class="font-semibold text-emerald-300">Connected</span>
+            Control State: <span class="font-semibold text-emerald-300">Connected</span>
           </div>
           <button class="relative rounded-lg border border-[var(--soc-border)] bg-slate-900/60 p-2 text-slate-300 transition-colors hover:text-slate-100">
             <span class="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500"></span>
@@ -95,6 +105,12 @@
       </header>
 
       <div class="relative flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <div class="mb-4 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-400">
+          <span class="rounded-full border border-[var(--soc-border)] bg-slate-950/50 px-3 py-1">Realtime defense</span>
+          <span class="rounded-full border border-[var(--soc-border)] bg-slate-950/50 px-3 py-1">Policy learning</span>
+          <span class="rounded-full border border-[var(--soc-border)] bg-slate-950/50 px-3 py-1">Audit ready</span>
+        </div>
+
         <router-view v-slot="{ Component }">
           <transition name="page" mode="out-in">
             <component :is="Component" />
@@ -126,16 +142,16 @@ const isMobileMenuOpen = ref(false)
 
 // Data-Driven Navigation
 const navigation = [
-  { name: 'Threat Triage', href: '/', icon: LayoutDashboard, description: 'Live queue and response tools' },
-  { name: 'AI Performance', href: '/performance', icon: Activity, description: 'Reward and learning trends' },
-  { name: 'Training History', href: '/training', icon: BrainCircuit, description: 'Epoch-level training logs' },
-  { name: 'Audit Logs', href: '/audit', icon: ClipboardList, description: 'Human intervention trail' },
+  { name: 'Threat Triage', href: '/', icon: LayoutDashboard, description: 'Live queue and response controls' },
+  { name: 'AI Performance', href: '/performance', icon: Activity, description: 'Reward curve and exploration' },
+  { name: 'Training History', href: '/training', icon: BrainCircuit, description: 'Epoch-level learning ledger' },
+  { name: 'Audit Logs', href: '/audit', icon: ClipboardList, description: 'Operator intervention trail' },
 ]
 
 const pageTitle = computed(() => {
   if (router.currentRoute.value.name === 'Dashboard') return 'Threat Triage Workspace'
-  if (router.currentRoute.value.name === 'AiPerformance') return 'AI Performance Analytics'
-  if (router.currentRoute.value.name === 'TrainingHistory') return 'Training Chronicle'
+  if (router.currentRoute.value.name === 'AiPerformance') return 'Learning Analytics'
+  if (router.currentRoute.value.name === 'TrainingHistory') return 'Training Ledger'
   if (router.currentRoute.value.name === 'AuditLogs') return 'Audit & Compliance'
   return 'RL Firewall'
 })
