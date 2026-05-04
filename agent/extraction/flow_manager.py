@@ -24,10 +24,10 @@ class Flow:
 
 class FlowManager:
     def __init__(self, window_size=100, timeout=120):
-        # Bidirectional hash table for flow tracking
+        # Flow table keyed by normalized 5-tuple.
         self.active_flows = defaultdict(Flow)
         self.window_size = window_size
-        self.timeout = timeout # Seconds before garbage collection
+        self.timeout = timeout
 
     def _generate_flow_key(self, packet) -> str:
         """Classically defines a flow by its 5-tuple."""
@@ -41,7 +41,7 @@ class FlowManager:
             elif packet.haslayer(UDP):
                 sport, dport = packet[UDP].sport, packet[UDP].dport
                 
-            # Sort endpoints to ensure bidirectionality maps to the same key
+            # Sort endpoints so both directions map to the same key.
             endpoints = sorted([f"{src}:{sport}", f"{dst}:{dport}"])
             return f"{endpoints[0]}-{endpoints[1]}-{proto}"
         return None
@@ -56,27 +56,23 @@ class FlowManager:
             
         flow = self.active_flows[key]
         
-        # Extract raw payload
         payload = packet[TCP].payload if packet.haslayer(TCP) else None
         flow.add_packet(packet, payload)
         
-        # NEW: Check for TCP flow termination flags
+        # Detect TCP teardown or reset.
         is_terminal = False
         if packet.haslayer(TCP):
             flags = packet[TCP].flags
-            # 'F' = FIN (graceful teardown), 'R' = RST (abrupt connection reset)
             if 'F' in flags or 'R' in flags:
                 is_terminal = True
         
-        # Check if sliding window epoch is reached OR the flow is suddenly terminated
+        # Emit state when window completes or flow terminates.
         if len(flow.packet_sizes) >= self.window_size or is_terminal:
             state_vector = self._compile_state_vector(flow)
             
             if is_terminal:
-                # Aggressive garbage collection: delete from memory immediately 
                 del self.active_flows[key]
             else:
-                # Reset the sliding window for this ongoing flow
                 flow.packet_sizes = []
                 flow.arrival_times = []
                 flow.payload_entropies = []
@@ -90,48 +86,44 @@ class FlowManager:
         Transforms raw flow data into a 12-dimensional state vector
         required by the DQN agent.
         """
-        # 1. Timing Dynamics (Inter-Arrival Times)
         iats = [j - i for i, j in zip(flow.arrival_times[:-1], flow.arrival_times[1:])]
         iat_stats = extract_statistical_features(iats)
         
-        # 2. Size Distributions
         size_stats = extract_statistical_features(flow.packet_sizes)
         
-        # 3. Payload Entropy
         entropy_stats = extract_statistical_features(flow.payload_entropies)
         
-        # 4. Flow Volumetrics
         duration = flow.arrival_times[-1] - flow.arrival_times[0] if len(flow.arrival_times) > 1 else 0.001
         throughput = sum(flow.packet_sizes) / duration
         
-        # Autocorrelation ranges from -1 to 1. Shift it to 0.0 -> 1.0 for the neural net
+        # Shift autocorrelation from [-1, 1] to [0, 1].
         normalized_autocorr = (iat_stats["autocorr"] + 1.0) / 2.0
 
         if math.isnan(normalized_autocorr):
-            normalized_autocorr = 0.5 #
+            normalized_autocorr = 0.5
 
-        # Construct raw 12-dimensional vector 
+        # Raw 12-dimensional state vector.
         raw_vector = [
             iat_stats["mean"], 
             iat_stats["std"], 
-            normalized_autocorr,          # NEW: IAT Autocorrelation
+            normalized_autocorr,
             size_stats["mean"], 
             size_stats["std"], 
             size_stats["max"], 
-            size_stats["iqr"],            # NEW: Size IQR
+            size_stats["iqr"],
             entropy_stats["mean"], 
-            entropy_stats["var"],         # REPLACED: Entropy Variance
+            entropy_stats["var"],
             duration, 
             throughput, 
             len(flow.packet_sizes)
         ]
         
-        # Heuristic maximums for normalization (must match the 12 dimensions above)
+        # Heuristic maxima for normalization (aligned to vector dimensions).
         max_values = [
-            1.0, 1.0, 1.0,                  # IAT (Autocorr is already pre-normalized)
-            1500, 500, 1500, 1500,          # Size (1500 is standard ethernet MTU)
-            1.0, 1.0,                       # Entropy
-            60.0, 1000000, self.window_size # Volumetrics
+            1.0, 1.0, 1.0,
+            1500, 500, 1500, 1500,
+            1.0, 1.0,
+            60.0, 1000000, self.window_size
         ]
         
         return normalize_vector(raw_vector, max_values)

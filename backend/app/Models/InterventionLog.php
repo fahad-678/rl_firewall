@@ -11,7 +11,13 @@ class InterventionLog extends Model
 
     protected $fillable = [
         'ip_address',
+        'port',
+        'confidence',
         'decision',
+        'action',
+        'flow_key',
+        'reward',
+        'latency_ms',
         'notes'
     ];
 }
