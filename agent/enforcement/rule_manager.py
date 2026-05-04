@@ -3,6 +3,10 @@ import time
 import threading
 import subprocess
 import requests
+try:
+    from netmiko import ConnectHandler
+except Exception:
+    ConnectHandler = None
 import json
 import ipaddress
 
@@ -71,7 +75,11 @@ class RuleManager:
             if self.mode == "simulation":
                 success = self._apply_iptables_block(optimal_cidr)
             elif self.mode == "hardware":
-                success = self._apply_restconf_acl(optimal_cidr)
+                # Prefer SSH-based ACL application for hardware mode
+                try:
+                    success = self._apply_ssh_block(optimal_cidr)
+                except Exception:
+                    success = self._apply_restconf_acl(optimal_cidr)
             else:
                 success = False
 
@@ -79,6 +87,7 @@ class RuleManager:
                 self.active_rules[optimal_cidr] = {
                     'expiration': expiration,
                     'rule_id': f"BLOCK_{optimal_cidr.replace('/', '_').replace('.', '_')}",
+                    'type': 'block',
                     'network': ipaddress.ip_network(optimal_cidr, strict=False)
                 }
                 return True, "Rule deployed successfully."
@@ -128,6 +137,81 @@ class RuleManager:
         except requests.exceptions.RequestException:
             return False
 
+    def _apply_ssh_block(self, target_cidr: str) -> bool:
+        """Applies an ACL on the switch via SSH using netmiko."""
+        if ConnectHandler is None:
+            print("[SSH ACL] netmiko not available in this environment.")
+            return False
+
+        acl_name = f"BLOCK{target_cidr.replace('/', '').replace('.', '')}"
+
+        device = {
+            'device_type': 'ruckus_fastiron',
+            'ip': self.mgmt_ip,
+            'username': self.auth[0],
+            'password': self.auth[1],
+            'fast_cli': False,
+        }
+
+        commands = [
+            'configure terminal',
+            f'ip access-list extended {acl_name}',
+            f'deny ip {target_cidr} any',
+            'exit',
+            'write memory'
+        ]
+
+        try:
+            try:
+                conn = ConnectHandler(**device)
+            except Exception:
+                # Fallback device type
+                device['device_type'] = 'generic_termserver'
+                conn = ConnectHandler(**device)
+
+            conn.send_config_set(commands)
+            conn.disconnect()
+            return True
+        except Exception as e:
+            print(f"[SSH ACL ERROR] Failed to apply SSH block for {target_cidr}: {e}")
+            return False
+
+    def _remove_ssh_block(self, target_cidr: str) -> bool:
+        """Removes an ACL on the switch via SSH using netmiko."""
+        if ConnectHandler is None:
+            print("[SSH ACL] netmiko not available in this environment.")
+            return False
+
+        acl_name = f"BLOCK{target_cidr.replace('/', '').replace('.', '')}"
+
+        device = {
+            'device_type': 'ruckus_fastiron',
+            'ip': self.mgmt_ip,
+            'username': self.auth[0],
+            'password': self.auth[1],
+            'fast_cli': False,
+        }
+
+        commands = [
+            'configure terminal',
+            f'no ip access-list extended {acl_name}',
+            'write memory'
+        ]
+
+        try:
+            try:
+                conn = ConnectHandler(**device)
+            except Exception:
+                device['device_type'] = 'generic_termserver'
+                conn = ConnectHandler(**device)
+
+            conn.send_config_set(commands)
+            conn.disconnect()
+            return True
+        except Exception as e:
+            print(f"[SSH ACL ERROR] Failed to remove SSH block for {target_cidr}: {e}")
+            return False
+
     def _remove_rule(self, target_cidr: str):
         """Automatically issues deletion commands based on rule type."""
         
@@ -146,16 +230,27 @@ class RuleManager:
             
         elif self.mode == "hardware":
             if rule_type == "block":
-                acl_name = f"BLOCK_{target_cidr.replace('/', '_').replace('.', '_')}"
-                url = f"https://{self.mgmt_ip}/restconf/data/ruckus-ip:ip/access-list/extended={acl_name}"
+                try:
+                    # Attempt SSH removal first
+                    removed = self._remove_ssh_block(target_cidr)
+                    if not removed:
+                        # Fallback to RESTCONF delete if SSH removal failed
+                        acl_name = f"BLOCK_{target_cidr.replace('/', '_').replace('.', '_')}"
+                        url = f"https://{self.mgmt_ip}/restconf/data/ruckus-ip:ip/access-list/extended={acl_name}"
+                        try:
+                            requests.delete(url, auth=self.auth, verify=False)
+                        except requests.exceptions.RequestException:
+                            pass
+                except Exception:
+                    pass
             else:
                 policy_name = f"THROTTLE_{clean_ip.replace('.', '_')}"
                 url = f"https://{self.mgmt_ip}/restconf/data/ruckus-qos:qos/traffic-policies/policy={policy_name}"
                 
-            try:
-                requests.delete(url, auth=self.auth, verify=False)
-            except requests.exceptions.RequestException:
-                pass
+                try:
+                    requests.delete(url, auth=self.auth, verify=False)
+                except requests.exceptions.RequestException:
+                    pass
             
         if target_cidr in self.active_rules:
             del self.active_rules[target_cidr]

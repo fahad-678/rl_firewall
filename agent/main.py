@@ -9,8 +9,7 @@ import json
 import threading
 import requests
 import queue
-from netfilterqueue import NetfilterQueue
-from scapy.all import IP, TCP
+from scapy.all import IP, TCP, sniff
 
 # Import our custom modules
 from extraction.flow_manager import FlowManager
@@ -18,8 +17,8 @@ from dqn.agent import DQNAgent
 from enforcement.rule_manager import RuleManager
 
 # Runtime configuration
-QUEUE_NUM = 0
 REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
+CAPTURE_IFACE = os.environ.get('CAPTURE_IFACE', 'eth1')
 
 class EpochTracker:
     def __init__(self, batch_size=100):
@@ -77,7 +76,12 @@ except Exception as e:
 # Initialize core components.
 flow_manager = FlowManager(window_size=10)
 dqn_agent = DQNAgent(input_dim=12, action_dim=3)
-rule_manager = RuleManager(mode="simulation") 
+# Initialize RuleManager from environment (env overrides defaults)
+mode = os.environ.get('FIREWALL_MODE', 'simulation')
+mgmt_ip = os.environ.get('ICX_MGMT_IP', '192.168.1.1')
+mgmt_user = os.environ.get('ICX_USER', 'admin')
+mgmt_pass = os.environ.get('ICX_PASSWORD', 'password')
+rule_manager = RuleManager(mode=mode, mgmt_ip=mgmt_ip, auth=(mgmt_user, mgmt_pass))
 
 # Simulated labels for offline reward shaping.
 KNOWN_MALICIOUS_IPS = {"192.168.1.100", "10.0.0.50", "172.16.0.23"}
@@ -145,15 +149,12 @@ def send_realtime_telemetry(src_ip, port, confidence, action, **extra_fields):
         
 def setup_iptables():
     """Routes specific traffic into the NFQUEUE."""
-    print(f"Setting up iptables to route traffic to NFQUEUE {QUEUE_NUM}...")
-    cmd = f"iptables -I INPUT -p tcp --dport 80 -j NFQUEUE --queue-num {QUEUE_NUM}"
-    subprocess.run(cmd.split(), check=True)
+    # No-op for out-of-band mirrored capture
+    print("Info: Running in out-of-band capture mode; not modifying iptables.")
 
 def cleanup_iptables(signum, frame):
-    """Gracefully removes the iptables rule and saves weights on shutdown."""
-    print("\n[!] Shutting down...")
-    
-    print("[*] Saving final model weights before exit...")
+    """Gracefully saves weights on shutdown."""
+    print("\n[!] Shutting down and saving model weights...")
     try:
         if hasattr(dqn_agent, 'save'):
             dqn_agent.save("firewall_weights.pth")
@@ -164,77 +165,54 @@ def cleanup_iptables(signum, frame):
     except Exception as e:
         print(f"[!] Failed to save weights: {e}")
 
-    print("Flushing iptables rules...")
-    cmd = f"iptables -D INPUT -p tcp --dport 80 -j NFQUEUE --queue-num {QUEUE_NUM}"
-    subprocess.run(cmd.split(), check=False)
     sys.exit(0)
 
-def process_packet(packet):
-    """Callback function executed for every packet in the queue."""
-    
-    scapy_pkt = IP(packet.get_payload())
-    
+def process_mirrored_packet(scapy_pkt):
+    """Handler for mirrored Scapy packets (out-of-band)."""
+    if scapy_pkt is None:
+        return
+
     if scapy_pkt.haslayer(IP) and scapy_pkt.haslayer(TCP):
         src_ip = scapy_pkt[IP].src
         dst_port = scapy_pkt[TCP].dport
         flow_key = flow_manager._generate_flow_key(scapy_pkt)
-        
-        # Track per-packet processing latency for reward penalty.
-        timer_start = time.time()
-        
-        state_vector, is_terminal = flow_manager.process_packet(scapy_pkt)
-        
-        if state_vector:
 
+        timer_start = time.time()
+        state_vector, is_terminal = flow_manager.process_packet(scapy_pkt)
+
+        if state_vector:
             state_vector = [0.0 if math.isnan(x) or math.isinf(x) else float(x) for x in state_vector]
-            
             dqn_agent.state_cache[src_ip] = state_vector
 
             action = dqn_agent.select_action(state_vector)
             confidence = getattr(dqn_agent, 'get_confidence', lambda x: 1.0)(state_vector)
 
             CONFIDENCE_THRESHOLD = 0.85
-            
             processing_time_ms = (time.time() - timer_start) * 1000
             latency_penalty = -0.1 * processing_time_ms
-            
-            # Compute supervised reward signal against simulated labels.
+
             is_malicious = src_ip in KNOWN_MALICIOUS_IPS
             base_reward = 0.0
-            
+
             if action == 1:
-                if is_malicious:
-                    base_reward = 10.0
-                else:
-                    base_reward = -50.0
+                base_reward = 10.0 if is_malicious else -50.0
             elif action == 0:
-                if is_malicious:
-                    base_reward = -20.0
-                else:
-                    base_reward = +1.0
+                base_reward = -20.0 if is_malicious else 1.0
             elif action == 2:
-                if is_malicious:
-                    base_reward = 2.0
-                else:
-                    base_reward = -10.0
-                    
+                base_reward = 2.0 if is_malicious else -10.0
+
             total_reward = base_reward + latency_penalty
             loss_val = None
-            
-            # Training transition update.
+
             if flow_key in flow_states:
                 prev = flow_states[flow_key]
-                
                 dqn_agent.memory.push(
                     state=prev['state'], action=prev['action'], reward=prev['reward'],
-                    next_state=state_vector, done=1 if is_terminal else 0 
+                    next_state=state_vector, done=1 if is_terminal else 0
                 )
-                
                 loss_val = dqn_agent.optimize_model()
-                
                 if dqn_agent.steps_done % 1000 == 0:
                     dqn_agent.update_target_network()
-
                     try:
                         if hasattr(dqn_agent, 'save'):
                             dqn_agent.save("firewall_weights.pth")
@@ -242,11 +220,10 @@ def process_packet(packet):
                             import torch
                             torch.save(dqn_agent.policy_net.state_dict(), "firewall_weights.pth")
                         print(f"[*] Checkpoint reached (Step {dqn_agent.steps_done}): Model weights saved to disk.")
-                    except Exception as e:
+                    except Exception:
                         pass
 
             epoch_tracker.record_step(action, total_reward, loss_val)
-            
             if epoch_tracker.is_ready():
                 current_epsilon = dqn_agent.epsilon_end + (dqn_agent.epsilon_start - dqn_agent.epsilon_end) * \
                                   math.exp(-1. * dqn_agent.steps_done / dqn_agent.epsilon_decay)
@@ -263,29 +240,24 @@ def process_packet(packet):
                 }
 
             status = "UNKNOWN"
-            
+
             if action == 1 and confidence < CONFIDENCE_THRESHOLD:
                 blocked_states_cache[src_ip] = state_vector
-                
                 rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=2, duration_seconds=600)
-                packet.accept() 
                 status = "NEEDS_REVIEW"
 
             elif action == 0:
-                packet.accept() 
                 status = "ACCEPTED"
-                
+
             elif action == 1:
                 blocked_states_cache[src_ip] = state_vector
                 rule_manager.deploy_block_rule(src_ip, duration_seconds=600)
-                packet.drop()   
                 status = "BLOCKED"
-                
+
             elif action == 2:
                 rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=50, duration_seconds=300)
-                packet.accept() 
                 status = "RATE_LIMITED"
-                
+
             send_realtime_telemetry(
                 src_ip,
                 dst_port,
@@ -297,7 +269,7 @@ def process_packet(packet):
                 is_malicious=is_malicious,
                 terminal=is_terminal,
             )
-            
+
             if redis_client:
                 telemetry_data = {
                     "src_ip": src_ip,
@@ -311,13 +283,7 @@ def process_packet(packet):
                     "terminal": is_terminal,
                 }
                 redis_client.publish('firewall-telemetry', json.dumps(telemetry_data))
-                
                 print(f"[AI] Evaluated IP {src_ip} -> {status} (Reward: {total_reward:.2f})", flush=True)
-                
-        else:
-            packet.accept()
-    else:
-        packet.accept()
 
 def handle_human_overrides():
     """
@@ -366,20 +332,17 @@ def handle_human_overrides():
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup_iptables)
     signal.signal(signal.SIGTERM, cleanup_iptables)
-
     setup_iptables()
-    
+
     # Start the Human-in-the-Loop Listener as a daemon thread
     override_thread = threading.Thread(target=handle_human_overrides, daemon=True)
     override_thread.start()
 
-    nfqueue = NetfilterQueue()
+    # Start Scapy sniffing on the mirrored interface (read-only)
     try:
-        nfqueue.bind(QUEUE_NUM, process_packet, max_len=50)
-        print("Firewall Agent running. Active Training Loop initialized...")
-        nfqueue.run()
+        print(f"Starting out-of-band packet capture on interface {CAPTURE_IFACE} (tcp)...")
+        sniff(iface=CAPTURE_IFACE, prn=process_mirrored_packet, store=0, filter="tcp")
     except Exception as e:
-        print(f"Error in NFQUEUE: {e}")
+        print(f"Error starting packet capture: {e}")
     finally:
-        nfqueue.unbind()
         cleanup_iptables(None, None)
