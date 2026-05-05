@@ -9,6 +9,7 @@ except Exception:
     ConnectHandler = None
 import json
 import ipaddress
+import re
 
 class RuleManager:
     def __init__(
@@ -28,6 +29,7 @@ class RuleManager:
         self.auth = auth
         self.ssh_key_file = ssh_key_file or os.environ.get("ICX_KEY_FILE")
         self.ssh_key_passphrase = ssh_key_passphrase or os.environ.get("ICX_KEY_PASSPHRASE")
+        self.block_interface = os.environ.get("SWITCH_BLOCK_INTERFACE", "ve 1")
         
         # Format: {'cidr': {'expiration': float, 'rule_id': str, 'network': IPv4Network}}
         self.active_rules = {}  
@@ -143,8 +145,10 @@ class RuleManager:
         """Translates the verdict into a standard Linux iptables drop command."""
         try:
             # Insert at the top so explicit blocks are evaluated first.
-            cmd = f"iptables -I INPUT 1 -s {target_cidr} -j DROP"
-            subprocess.run(cmd.split(), check=True)
+            source_cmd = f"iptables -I INPUT 1 -s {target_cidr} -j DROP"
+            destination_cmd = f"iptables -I OUTPUT 1 -d {target_cidr} -j DROP"
+            subprocess.run(source_cmd.split(), check=True)
+            subprocess.run(destination_cmd.split(), check=True)
             return True
         except subprocess.CalledProcessError:
             return False
@@ -171,6 +175,13 @@ class RuleManager:
                         "protocol": "ip",
                         "source": {"host": network_address, "mask": wildcard_mask} if wildcard_mask != "0.0.0.0" else {"host": network_address},
                         "destination": {"any": [None]}
+                    },
+                    {
+                        "seq": 20,
+                        "action": "deny",
+                        "protocol": "ip",
+                        "source": {"any": [None]},
+                        "destination": {"host": network_address, "mask": wildcard_mask} if wildcard_mask != "0.0.0.0" else {"host": network_address}
                     }
                 ]
             }
@@ -189,23 +200,36 @@ class RuleManager:
             return False
 
         acl_name = f"BLOCK{target_cidr.replace('/', '').replace('.', '')}"
+        network_address = target_cidr.split('/')[0]
+        
+        print(f"[SSH ACL] Creating block rule for {network_address} with ACL name {acl_name}")
 
         commands = [
             'configure terminal',
             f'ip access-list extended {acl_name}',
-            f'deny ip {target_cidr} any',
+            f'deny ip host {network_address} any',
+            f'deny ip any host {network_address}',
+            'exit',
+            f'interface {self.block_interface}',
+            f'ip access-group {acl_name} in',
             'exit',
             'write memory'
         ]
+        
+        print(f"[SSH ACL] Commands to send: {commands}")
 
         try:
             conn = self._connect_ssh()
+            print(f"[SSH ACL] Connected to switch at {self.mgmt_ip}")
 
             conn.send_config_set(commands)
+            print(f"[SSH ACL] Successfully deployed block rule for {network_address}")
             conn.disconnect()
             return True
         except Exception as e:
+            import traceback
             print(f"[SSH ACL ERROR] Failed to apply SSH block for {target_cidr}: {e}")
+            print(f"[SSH ACL ERROR] Traceback: {traceback.format_exc()}")
             return False
 
     def _remove_ssh_block(self, target_cidr: str) -> bool:
@@ -218,6 +242,9 @@ class RuleManager:
 
         commands = [
             'configure terminal',
+            f'interface {self.block_interface}',
+            f'no ip access-group {acl_name} in',
+            'exit',
             f'no ip access-list extended {acl_name}',
             'write memory'
         ]
@@ -241,12 +268,17 @@ class RuleManager:
         
         if self.mode == "simulation":
             if rule_type == "block":
-                cmd = f"iptables -D INPUT -s {target_cidr} -j DROP"
+                source_cmd = f"iptables -D INPUT -s {target_cidr} -j DROP"
+                destination_cmd = f"iptables -D OUTPUT -d {target_cidr} -j DROP"
             else:
                 limit_name = f"throttle_{clean_ip.replace('.', '_')}"
                 cmd = f"iptables -D INPUT -s {clean_ip} -m hashlimit --hashlimit-above 50/sec --hashlimit-burst 100 --hashlimit-mode srcip --hashlimit-name {limit_name} -j DROP"
             
-            subprocess.run(cmd.split(), check=False)
+            if rule_type == "block":
+                subprocess.run(source_cmd.split(), check=False)
+                subprocess.run(destination_cmd.split(), check=False)
+            else:
+                subprocess.run(cmd.split(), check=False)
             
         elif self.mode == "hardware":
             if rule_type == "block":
@@ -274,6 +306,51 @@ class RuleManager:
             
         if target_cidr in self.active_rules:
             del self.active_rules[target_cidr]
+
+    def list_switch_block_rules(self):
+        """Return block rules currently configured on the switch."""
+        if ConnectHandler is None:
+            print("[SSH ACL] netmiko not available in this environment.")
+            return []
+
+        try:
+            conn = self._connect_ssh()
+            output = conn.send_command('show ip access-list')
+            conn.disconnect()
+        except Exception as e:
+            print(f"[SSH ACL ERROR] Failed to read switch ACLs: {e}")
+            return []
+
+        rules = []
+        current_acl = None
+        current_acl_name = None
+
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            acl_match = re.match(r'^(Extended IP access list|IP access list extended)\s+(\S+)', line, re.IGNORECASE)
+            if acl_match:
+                current_acl_name = acl_match.group(2)
+                current_acl = []
+                continue
+
+            if current_acl_name and line.lower().startswith('10: deny ip'):
+                host_match = re.search(r'deny ip host ([0-9.]+) any', line, re.IGNORECASE)
+                if host_match:
+                    ip_address = host_match.group(1)
+                    rules.append({
+                        'ip_address': ip_address,
+                        'action': 'BLOCK',
+                        'rule_type': 'PERMANENT',
+                        'port': None,
+                        'notes': f'Imported from switch ACL {current_acl_name}',
+                        'status': 'ACTIVE',
+                        'acl_name': current_acl_name,
+                    })
+
+        return rules
 
     def _enforce_ttl(self):
         """Garbage collection for expired rules."""

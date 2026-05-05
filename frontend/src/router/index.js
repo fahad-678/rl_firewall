@@ -4,6 +4,7 @@ import Dashboard from '../views/Dashboard.vue'
 import AiPerformance from '../views/AiPerformance.vue'
 import TrainingHistory from '../views/TrainingHistory.vue'
 import AuditLogs from '../views/AuditLogs.vue'
+import ManualRules from '../views/ManualRules.vue'
 import Login from '../views/Login.vue'
 import authService from '../services/authService.js'
 
@@ -23,6 +24,7 @@ const routes = [
       { path: 'performance', name: 'AiPerformance', component: AiPerformance },
       { path: 'training', name: 'TrainingHistory', component: TrainingHistory },
       { path: 'audit', name: 'AuditLogs', component: AuditLogs },
+      { path: 'manual-rules', name: 'ManualRules', component: ManualRules },
     ]
   }
 ]

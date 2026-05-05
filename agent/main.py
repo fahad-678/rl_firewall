@@ -19,6 +19,8 @@ from enforcement.rule_manager import RuleManager
 # Runtime configuration
 REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
 CAPTURE_IFACE = os.environ.get('CAPTURE_IFACE', 'eth1')
+RULE_SYNC_TOKEN = os.environ.get('RULE_SYNC_TOKEN', '')
+ACTIVE_RULES_SYNC_URL = os.environ.get('ACTIVE_RULES_SYNC_URL', 'http://localhost/api/firewall/rules/active-sync')
 
 class EpochTracker:
     def __init__(self, batch_size=100):
@@ -101,6 +103,8 @@ telemetry_queue = queue.Queue(maxsize=100)
 metrics_queue = queue.Queue(maxsize=50)
 
 LARAVEL_API_URL = "http://localhost/api/ai/performance"
+MANUAL_RULES_IMPORT_URL = "http://localhost/api/firewall/rules/import-switch"
+MANUAL_RULES_SYNC_TOKEN = os.environ.get('RULE_SYNC_TOKEN', '')
 
 def metrics_worker():
     """Background thread that saves graph data to Laravel without blocking."""
@@ -142,6 +146,73 @@ def telemetry_worker():
         telemetry_queue.task_done()
 
 threading.Thread(target=telemetry_worker, daemon=True).start()
+
+def import_switch_rules_to_backend():
+    """Reads switch ACLs and imports them into the backend dashboard store."""
+    if not MANUAL_RULES_SYNC_TOKEN:
+        print("[Switch Import] RULE_SYNC_TOKEN is not set; skipping ACL import.")
+        return
+
+    try:
+        switch_rules = rule_manager.list_switch_block_rules()
+        if not switch_rules:
+            print("[Switch Import] No ACL rules found on switch.")
+            return
+
+        response = requests.post(
+            MANUAL_RULES_IMPORT_URL,
+            json={"rules": switch_rules},
+            headers={"X-Rule-Sync-Token": MANUAL_RULES_SYNC_TOKEN},
+            timeout=10,
+        )
+        response.raise_for_status()
+        print(f"[Switch Import] Imported {len(switch_rules)} switch ACL rule(s) into backend.")
+    except Exception as e:
+        print(f"[Switch Import] Failed to import switch rules: {e}")
+
+def handle_manual_rule_events():
+    """Listen for manual rule updates and push them to the switch immediately."""
+    print("[Manual Rules] Starting event listener thread")
+    if not redis_client:
+        print("[Manual Rules] ERROR: Redis client not available!")
+        return
+
+    pubsub = redis_client.pubsub()
+    pubsub.subscribe('manual-firewall-rules')
+    print("[Manual Rules] Listening for events on 'manual-firewall-rules' channel...")
+
+    for message in pubsub.listen():
+        print(f"[Manual Rules] Received message: {message}")
+        if message['type'] != 'message':
+            print(f"[Manual Rules] Skipping non-message type: {message['type']}")
+            continue
+
+        try:
+            data = json.loads(message['data'])
+            print(f"[Manual Rules] Parsed data: {data}")
+            action = data.get('action')
+            rule_data = data.get('rule_data', {})
+            ip_address = rule_data.get('ip_address')
+            rule_action = rule_data.get('action')
+
+            if not ip_address or not rule_action:
+                print(f"[Manual Rules] Missing required fields: ip_address={ip_address}, rule_action={rule_action}")
+                continue
+
+            if action in ('created', 'updated'):
+                if rule_action == 'BLOCK':
+                    print(f"[Manual Rules] Applying BLOCK for {ip_address}")
+                    rule_manager.deploy_block_rule(ip_address, duration_seconds=3600 if rule_data.get('rule_type') == 'PERMANENT' else 600)
+                elif rule_action == 'ALLOW':
+                    print(f"[Manual Rules] Applying ALLOW for {ip_address} (removing block)")
+                    rule_manager._remove_rule(ip_address)
+            elif action == 'deleted':
+                print(f"[Manual Rules] Removing rule for {ip_address}")
+                rule_manager._remove_rule(ip_address)
+        except Exception as e:
+            import traceback
+            print(f"[Manual Rules] Error processing event: {e}")
+            print(f"[Manual Rules] Traceback: {traceback.format_exc()}")
 
 def send_realtime_telemetry(src_ip, port, confidence, action, **extra_fields):
     """Adds telemetry to the queue if the queue isn't full."""
@@ -336,15 +407,77 @@ def handle_human_overrides():
                         
             except Exception as e:
                 print(f"Error processing override: {e}")
-
+def handle_manual_rules():
+    """
+    Background thread that periodically fetches manual firewall rules from the backend
+    and applies them via the rule manager.
+    """
+    last_rules = {}
+    poll_interval = 30  # Poll every 30 seconds
+    backend_url = ACTIVE_RULES_SYNC_URL
+    
+    print("Starting manual rules polling thread (interval: 30s)...")
+    
+    while True:
+        try:
+            time.sleep(poll_interval)
+            
+            headers = {'X-Rule-Sync-Token': RULE_SYNC_TOKEN} if RULE_SYNC_TOKEN else {}
+            response = requests.get(backend_url, headers=headers, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            current_rules = {}
+            
+            if 'rules' in data:
+                for rule in data['rules']:
+                    rule_key = f"{rule.get('ip_address')}_{rule.get('port', 'any')}"
+                    current_rules[rule_key] = rule
+                    
+                    # Check if this is a new rule
+                    if rule_key not in last_rules:
+                        ip_address = rule.get('ip_address')
+                        action = rule.get('action')
+                        
+                        if action == 'BLOCK':
+                            print(f"[Manual] Applying BLOCK rule for IP: {ip_address}")
+                            rule_manager.deploy_block_rule(ip_address, duration_seconds=3600)
+                        elif action == 'ALLOW':
+                            print(f"[Manual] Applying ALLOW rule for IP: {ip_address}")
+                            # For ALLOW, we remove any existing block for this IP
+                            rule_manager._remove_rule(ip_address)
+                
+                # Check for deleted rules (exist in last_rules but not in current_rules)
+                for rule_key in list(last_rules.keys()):
+                    if rule_key not in current_rules:
+                        old_rule = last_rules[rule_key]
+                        ip_address = old_rule.get('ip_address')
+                        print(f"[Manual] Removing rule for IP: {ip_address}")
+                        rule_manager._remove_rule(ip_address)
+                
+                last_rules = current_rules
+                
+        except Exception as e:
+            print(f"[Manual Rules] Error fetching rules: {e}")
+            time.sleep(5)  # Wait before retry on error
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup_iptables)
     signal.signal(signal.SIGTERM, cleanup_iptables)
     setup_iptables()
 
+    # One-time import of switch ACLs into the dashboard store.
+    import_switch_rules_to_backend()
+
     # Start the Human-in-the-Loop Listener as a daemon thread
     override_thread = threading.Thread(target=handle_human_overrides, daemon=True)
     override_thread.start()
+
+    # Listen for manual rule changes so the switch is updated immediately.
+    manual_rule_events_thread = threading.Thread(target=handle_manual_rule_events, daemon=True)
+    manual_rule_events_thread.start()
+
+    # Start the Manual Rules Polling thread as a daemon thread
+    manual_rules_thread = threading.Thread(target=handle_manual_rules, daemon=True)
+    manual_rules_thread.start()
 
     # Start Scapy sniffing on the mirrored interface (read-only)
     try:

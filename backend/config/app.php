@@ -28,6 +28,8 @@ return [
 
     'env' => env('APP_ENV', 'production'),
 
+    'rule_sync_token' => env('RULE_SYNC_TOKEN', ''),
+
     /*
     |--------------------------------------------------------------------------
     | Application Debug Mode

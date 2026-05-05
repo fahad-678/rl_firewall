@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AiMetricsController;
 use App\Http\Controllers\FirewallController;
+use App\Http\Controllers\ManualRulesController;
 
 // Protected routes (require authentication via admin middleware + web session)
 Route::middleware(['web', 'admin'])->group(function () {
@@ -25,5 +26,18 @@ Route::middleware(['web', 'admin'])->group(function () {
         
         // Audit logs
         Route::get('/interventions', [FirewallController::class, 'getInterventions']);
+
+        // Manual firewall rules management
+        Route::prefix('rules')->group(function () {
+            Route::get('/', [ManualRulesController::class, 'index']);
+            Route::post('/', [ManualRulesController::class, 'store']);
+            Route::get('/active', [ManualRulesController::class, 'getActive']);
+            Route::get('/{rule}', [ManualRulesController::class, 'show']);
+            Route::put('/{rule}', [ManualRulesController::class, 'update']);
+            Route::delete('/{rule}', [ManualRulesController::class, 'destroy']);
+        });
     });
 });
+
+Route::post('/firewall/rules/import-switch', [ManualRulesController::class, 'importSwitchRules']);
+Route::get('/firewall/rules/active-sync', [ManualRulesController::class, 'getActiveSync']);

@@ -129,6 +129,7 @@ import {
   Activity,
   BrainCircuit,
   ClipboardList,
+  ShieldAlert,
   Menu,
   X,
   Bell
@@ -146,6 +147,7 @@ const navigation = [
   { name: 'AI Performance', href: '/performance', icon: Activity, description: 'Reward curve and exploration' },
   { name: 'Training History', href: '/training', icon: BrainCircuit, description: 'Epoch-level learning ledger' },
   { name: 'Audit Logs', href: '/audit', icon: ClipboardList, description: 'Operator intervention trail' },
+  { name: 'Manual Rules', href: '/manual-rules', icon: ShieldAlert, description: 'Block/allow specific IPs' },
 ]
 
 const pageTitle = computed(() => {
