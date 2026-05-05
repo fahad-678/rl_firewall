@@ -3,6 +3,7 @@ FROM python:3.10-slim
 RUN apt-get update && apt-get install -y \
     build-essential \
     iptables \
+    libpcap-dev \
     libnetfilter-queue-dev \
     libffi-dev \
     python3-dev \

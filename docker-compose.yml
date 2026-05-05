@@ -6,6 +6,8 @@ services:
       context: ./agent
       network: host
     container_name: rl_firewall_agent
+    env_file:
+      - ./agent/.env
     cap_add:
       - NET_ADMIN
       - NET_RAW
