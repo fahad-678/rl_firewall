@@ -81,7 +81,15 @@ mode = os.environ.get('FIREWALL_MODE', 'simulation')
 mgmt_ip = os.environ.get('ICX_MGMT_IP', '192.168.1.1')
 mgmt_user = os.environ.get('ICX_USER', 'admin')
 mgmt_pass = os.environ.get('ICX_PASSWORD', 'password')
-rule_manager = RuleManager(mode=mode, mgmt_ip=mgmt_ip, auth=(mgmt_user, mgmt_pass))
+mgmt_key_file = os.environ.get('ICX_KEY_FILE')
+mgmt_key_passphrase = os.environ.get('ICX_KEY_PASSPHRASE')
+rule_manager = RuleManager(
+    mode=mode,
+    mgmt_ip=mgmt_ip,
+    auth=(mgmt_user, mgmt_pass),
+    ssh_key_file=mgmt_key_file,
+    ssh_key_passphrase=mgmt_key_passphrase,
+)
 
 # Simulated labels for offline reward shaping.
 KNOWN_MALICIOUS_IPS = {"192.168.1.100", "10.0.0.50", "172.16.0.23"}

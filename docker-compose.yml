@@ -15,11 +15,19 @@ services:
     network_mode: "host"
     environment:
       - REDIS_HOST=127.0.0.1 # Using host networking
+      - FIREWALL_MODE=hardware
+      - CAPTURE_IFACE=eno4
+      - ICX_MGMT_IP=192.168.1.50
+      - ICX_USER=admin
+      - ICX_PASSWORD=adminadmin
+      - ICX_KEY_FILE=/run/secrets/icx_rl_firewall
+      - ICX_KEY_PASSPHRASE=
     depends_on:
       - redis
       - backend
     volumes:
       - ./agent:/app
+      - ./agent/secrets:/run/secrets:ro
 
   # 2. The Application Container (PHP-FPM / Laravel)
   backend:

@@ -11,7 +11,14 @@ import json
 import ipaddress
 
 class RuleManager:
-    def __init__(self, mode="simulation", mgmt_ip="192.168.1.1", auth=("admin", "password")):
+    def __init__(
+        self,
+        mode="simulation",
+        mgmt_ip="192.168.1.1",
+        auth=("admin", "password"),
+        ssh_key_file=None,
+        ssh_key_passphrase=None,
+    ):
         """
         Initializes the Rule Manager for either 'simulation' (iptables) 
         or 'hardware' (RESTCONF) mode.
@@ -19,6 +26,8 @@ class RuleManager:
         self.mode = mode
         self.mgmt_ip = mgmt_ip
         self.auth = auth
+        self.ssh_key_file = ssh_key_file or os.environ.get("ICX_KEY_FILE")
+        self.ssh_key_passphrase = ssh_key_passphrase or os.environ.get("ICX_KEY_PASSPHRASE")
         
         # Format: {'cidr': {'expiration': float, 'rule_id': str, 'network': IPv4Network}}
         self.active_rules = {}  
@@ -27,6 +36,42 @@ class RuleManager:
         # Start background cleanup for rule TTL expiration.
         self.garbage_collector = threading.Thread(target=self._enforce_ttl, daemon=True)
         self.garbage_collector.start()
+
+    def _build_ssh_device(self, use_key_auth: bool):
+        device = {
+            'device_type': 'ruckus_fastiron',
+            'ip': self.mgmt_ip,
+            'username': self.auth[0],
+            'fast_cli': False,
+            'allow_agent': False,
+        }
+
+        if use_key_auth and self.ssh_key_file:
+            device['use_keys'] = True
+            device['key_file'] = self.ssh_key_file
+            if self.ssh_key_passphrase:
+                device['passphrase'] = self.ssh_key_passphrase
+        else:
+            device['use_keys'] = False
+            device['password'] = self.auth[1]
+
+        return device
+
+    def _connect_ssh(self):
+        """Connect with key auth first, then fall back to password auth."""
+        attempts = []
+        if self.ssh_key_file:
+            attempts.append(self._build_ssh_device(use_key_auth=True))
+        attempts.append(self._build_ssh_device(use_key_auth=False))
+
+        last_error = None
+        for device in attempts:
+            try:
+                return ConnectHandler(**device)
+            except Exception as exc:
+                last_error = exc
+
+        raise last_error
 
     def _resolve_conflicts(self, target_cidr: str, duration_seconds: int):
         """
@@ -145,14 +190,6 @@ class RuleManager:
 
         acl_name = f"BLOCK{target_cidr.replace('/', '').replace('.', '')}"
 
-        device = {
-            'device_type': 'ruckus_fastiron',
-            'ip': self.mgmt_ip,
-            'username': self.auth[0],
-            'password': self.auth[1],
-            'fast_cli': False,
-        }
-
         commands = [
             'configure terminal',
             f'ip access-list extended {acl_name}',
@@ -162,12 +199,7 @@ class RuleManager:
         ]
 
         try:
-            try:
-                conn = ConnectHandler(**device)
-            except Exception:
-                # Fallback device type
-                device['device_type'] = 'generic_termserver'
-                conn = ConnectHandler(**device)
+            conn = self._connect_ssh()
 
             conn.send_config_set(commands)
             conn.disconnect()
@@ -184,14 +216,6 @@ class RuleManager:
 
         acl_name = f"BLOCK{target_cidr.replace('/', '').replace('.', '')}"
 
-        device = {
-            'device_type': 'ruckus_fastiron',
-            'ip': self.mgmt_ip,
-            'username': self.auth[0],
-            'password': self.auth[1],
-            'fast_cli': False,
-        }
-
         commands = [
             'configure terminal',
             f'no ip access-list extended {acl_name}',
@@ -199,11 +223,7 @@ class RuleManager:
         ]
 
         try:
-            try:
-                conn = ConnectHandler(**device)
-            except Exception:
-                device['device_type'] = 'generic_termserver'
-                conn = ConnectHandler(**device)
+            conn = self._connect_ssh()
 
             conn.send_config_set(commands)
             conn.disconnect()
