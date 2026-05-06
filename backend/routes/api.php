@@ -18,7 +18,6 @@ Route::middleware(['web', 'admin'])->group(function () {
     Route::prefix('firewall')->group(function () {
         Route::get('/recent-telemetry', [FirewallController::class, 'getRecentTelemetry']);
         Route::get('/telemetry', [FirewallController::class, 'getTelemetry']);
-        Route::post('/telemetry', [FirewallController::class, 'receiveTelemetry']);
         
         // Human-in-the-loop actions
         Route::post('/review', [FirewallController::class, 'review']);
@@ -38,6 +37,10 @@ Route::middleware(['web', 'admin'])->group(function () {
         });
     });
 });
+
+// Telemetry ingestion is called by the Python agent, so it uses the shared sync token
+// instead of browser session auth.
+Route::post('/firewall/telemetry', [FirewallController::class, 'receiveTelemetry']);
 
 Route::post('/firewall/rules/import-switch', [ManualRulesController::class, 'importSwitchRules']);
 Route::get('/firewall/rules/active-sync', [ManualRulesController::class, 'getActiveSync']);

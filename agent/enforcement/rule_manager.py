@@ -239,6 +239,7 @@ class RuleManager:
             return False
 
         acl_name = f"BLOCK{target_cidr.replace('/', '').replace('.', '')}"
+        print(f"[SSH ACL] Removing block rule for {target_cidr} with ACL name {acl_name}")
 
         commands = [
             'configure terminal',
@@ -249,14 +250,20 @@ class RuleManager:
             'write memory'
         ]
 
+        print(f"[SSH ACL] Commands to send: {commands}")
+
         try:
             conn = self._connect_ssh()
+            print(f"[SSH ACL] Connected to switch at {self.mgmt_ip}")
 
             conn.send_config_set(commands)
+            print(f"[SSH ACL] Successfully removed block rule for {target_cidr}")
             conn.disconnect()
             return True
         except Exception as e:
+            import traceback
             print(f"[SSH ACL ERROR] Failed to remove SSH block for {target_cidr}: {e}")
+            print(f"[SSH ACL ERROR] Traceback: {traceback.format_exc()}")
             return False
 
     def _remove_rule(self, target_cidr: str):
@@ -324,6 +331,7 @@ class RuleManager:
         rules = []
         current_acl = None
         current_acl_name = None
+        seen_ips = set()  # Track IPs already added to avoid duplicates
 
         for raw_line in output.splitlines():
             line = raw_line.strip()
@@ -334,21 +342,29 @@ class RuleManager:
             if acl_match:
                 current_acl_name = acl_match.group(2)
                 current_acl = []
+                seen_ips.clear()
                 continue
 
             if current_acl_name and line.lower().startswith('10: deny ip'):
+                # Capture both "deny ip host X any" and "deny ip any host X" patterns
                 host_match = re.search(r'deny ip host ([0-9.]+) any', line, re.IGNORECASE)
+                if not host_match:
+                    host_match = re.search(r'deny ip any host ([0-9.]+)', line, re.IGNORECASE)
+                
                 if host_match:
                     ip_address = host_match.group(1)
-                    rules.append({
-                        'ip_address': ip_address,
-                        'action': 'BLOCK',
-                        'rule_type': 'PERMANENT',
-                        'port': None,
-                        'notes': f'Imported from switch ACL {current_acl_name}',
-                        'status': 'ACTIVE',
-                        'acl_name': current_acl_name,
-                    })
+                    # Only add once per IP per ACL to avoid duplicates from bidirectional rules
+                    if ip_address not in seen_ips:
+                        seen_ips.add(ip_address)
+                        rules.append({
+                            'ip_address': ip_address,
+                            'action': 'BLOCK',
+                            'rule_type': 'PERMANENT',
+                            'port': None,
+                            'notes': f'Imported from switch ACL {current_acl_name}',
+                            'status': 'ACTIVE',
+                            'acl_name': current_acl_name,
+                        })
 
         return rules
 

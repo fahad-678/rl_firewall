@@ -54,6 +54,28 @@ services:
     volumes:
       - ./backend:/var/www/html # Mount source code for easy updates
 
+  # 2b. Redis telemetry listener for browser broadcasts
+  backend-listener:
+    build:
+      context: ./backend
+    container_name: rl_firewall_backend_listener
+    environment:
+      - DB_CONNECTION=mysql
+      - DB_HOST=db
+      - REDIS_HOST=redis
+      - LOG_CHANNEL=stderr
+      - RULE_SYNC_TOKEN=rl-firewall-sync-token
+      - BROADCAST_DRIVER=reverb
+      - REVERB_APP_ID=683668
+      - REVERB_APP_KEY=firewallkey123
+      - REVERB_APP_SECRET=firewallsecret
+    depends_on:
+      - backend
+      - redis
+    volumes:
+      - ./backend:/var/www/html
+    command: php artisan firewall:listen
+
   # 3. The Web Server Container (Nginx / Vue.js)
   webserver:
     build:

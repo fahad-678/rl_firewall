@@ -6,6 +6,7 @@ use App\Models\InterventionLog;
 use App\Models\User;
 use App\Models\ManualFirewallRule;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 
 class ManualRulesController extends Controller
@@ -192,25 +193,44 @@ class ManualRulesController extends Controller
 
         $imported = 0;
 
-        foreach ($validated['rules'] as $incomingRule) {
-            $rule = ManualFirewallRule::updateOrCreate(
-                [
-                    'ip_address' => $incomingRule['ip_address'],
-                    'action' => $incomingRule['action'],
-                    'port' => $incomingRule['port'] ?? null,
-                ],
-                [
-                    'rule_type' => $incomingRule['rule_type'] ?? 'PERMANENT',
-                    'expiration_at' => null,
-                    'notes' => $incomingRule['notes'] ?? 'Imported from switch ACL',
-                    'created_by' => $systemUser->id,
-                    'status' => $incomingRule['status'] ?? 'ACTIVE',
-                ]
-            );
+        DB::transaction(function () use ($validated, $systemUser, &$imported) {
+            $snapshot = collect($validated['rules'])
+                ->map(function (array $incomingRule) {
+                    return [
+                        'ip_address' => $incomingRule['ip_address'],
+                        'action' => $incomingRule['action'],
+                        'port' => $incomingRule['port'] ?? null,
+                        'rule_type' => $incomingRule['rule_type'] ?? 'PERMANENT',
+                        'notes' => $incomingRule['notes'] ?? 'Imported from switch ACL',
+                    ];
+                })
+                ->values();
 
-            $this->recordIntervention($rule, 'imported');
-            $imported++;
-        }
+            // Treat the switch snapshot as authoritative during bootstrap.
+            ManualFirewallRule::query()
+                ->where('status', 'ACTIVE')
+                ->update(['status' => 'DELETED']);
+
+            foreach ($snapshot as $incomingRule) {
+                $rule = ManualFirewallRule::updateOrCreate(
+                    [
+                        'ip_address' => $incomingRule['ip_address'],
+                        'action' => $incomingRule['action'],
+                        'port' => $incomingRule['port'],
+                    ],
+                    [
+                        'rule_type' => $incomingRule['rule_type'],
+                        'expiration_at' => null,
+                        'notes' => $incomingRule['notes'],
+                        'created_by' => $systemUser->id,
+                        'status' => 'ACTIVE',
+                    ]
+                );
+
+                $this->recordIntervention($rule, 'imported');
+                $imported++;
+            }
+        });
 
         return response()->json([
             'message' => 'Switch ACL rules imported successfully.',

@@ -140,7 +140,8 @@ def telemetry_worker():
     while True:
         payload = telemetry_queue.get()
         try:
-            requests.post("http://localhost/api/firewall/telemetry", json=payload, timeout=0.5)
+            headers = {'X-Rule-Sync-Token': RULE_SYNC_TOKEN} if RULE_SYNC_TOKEN else {}
+            requests.post("http://localhost/api/firewall/telemetry", json=payload, headers=headers, timeout=0.5)
         except Exception:
             pass
         telemetry_queue.task_done()
@@ -456,8 +457,18 @@ def handle_manual_rules():
                 
                 last_rules = current_rules
                 
+        except requests.exceptions.Timeout:
+            print(f"[Manual Rules] Timeout fetching rules from {backend_url}")
+        except requests.exceptions.ConnectionError as e:
+            print(f"[Manual Rules] Connection error fetching rules: {e}")
+        except requests.exceptions.HTTPError as e:
+            print(f"[Manual Rules] HTTP error fetching rules: {e}")
+            if hasattr(e.response, 'text'):
+                print(f"[Manual Rules] Response body: {e.response.text}")
         except Exception as e:
+            import traceback
             print(f"[Manual Rules] Error fetching rules: {e}")
+            print(f"[Manual Rules] Traceback: {traceback.format_exc()}")
             time.sleep(5)  # Wait before retry on error
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup_iptables)

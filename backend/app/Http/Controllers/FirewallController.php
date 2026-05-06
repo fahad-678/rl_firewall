@@ -15,6 +15,15 @@ class FirewallController extends Controller
      */
     public function receiveTelemetry(Request $request)
     {
+        $token = (string) $request->header('X-Rule-Sync-Token', '');
+        $expectedToken = (string) config('app.rule_sync_token', env('RULE_SYNC_TOKEN', ''));
+
+        if ($expectedToken === '' || !hash_equals($expectedToken, $token)) {
+            return response()->json([
+                'message' => 'Unauthorized telemetry request.',
+            ], 401);
+        }
+
         $validated = $request->validate([
             'src_ip'       => 'required|string',
             'port'         => 'nullable|integer',

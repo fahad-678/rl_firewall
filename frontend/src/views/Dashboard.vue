@@ -39,9 +39,9 @@
 
     <section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
       <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 60ms">
-        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Active Queue</p>
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Recent Feed</p>
         <p class="mt-2 text-3xl font-semibold text-cyan-100">{{ filteredThreats.length }}</p>
-        <p class="mt-1 text-xs text-slate-400">Filtered incidents ready for analyst action</p>
+        <p class="mt-1 text-xs text-slate-400">Visible incidents from telemetry and intervention history, capped at 50</p>
       </article>
 
       <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 120ms">
@@ -115,6 +115,15 @@
         </div>
       </div>
     </section>
+
+    <transition name="fade">
+      <section
+        v-if="!isLoading && !liveTelemetrySeen"
+        class="soc-panel rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"
+      >
+        No live packets have arrived yet. Verify the switch mirror port, the agent capture interface, and the backend telemetry listener.
+      </section>
+    </transition>
 
     <section class="grid grid-cols-1 gap-6 xl:grid-cols-[1.6fr_1fr]">
       <article class="soc-panel rounded-xl overflow-hidden">
@@ -280,6 +289,7 @@ const errorMessage = ref('');
 const isLoading = ref(true);
 const selectedThreatId = ref(null);
 const noteDraft = ref('');
+const liveTelemetrySeen = ref(false);
 const filters = ref({
   action: 'ALL',
   port: '',
@@ -399,6 +409,7 @@ onMounted(async () => {
 
   echo.channel('firewall-telemetry')
       .listen('.threat.detected', (e) => {
+        liveTelemetrySeen.value = true;
           const threat = normalizeThreat(e.telemetryData);
           threatLog.value.unshift(threat);
 
