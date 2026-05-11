@@ -37,20 +37,24 @@ class DQNAgent:
         self.memory = ExperienceReplay(capacity=50000)
 
         self.state_cache = {}
-        
+        self.last_was_exploration = False
+
     def select_action(self, state_vector):
-        """Epsilon-greedy action selection."""
+        """Epsilon-greedy action selection. Sets `last_was_exploration` so the
+        caller can decide whether to enforce or only learn from this transition."""
         sample = random.random()
         eps_threshold = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * \
             math.exp(-1. * self.steps_done / self.epsilon_decay)
         self.steps_done += 1
 
         if sample > eps_threshold:
+            self.last_was_exploration = False
             with torch.no_grad():
                 state_tensor = torch.tensor([state_vector], dtype=torch.float32)
                 q_values = self.policy_net(state_tensor)
                 return q_values.max(1)[1].item()
         else:
+            self.last_was_exploration = True
             return random.randrange(self.action_dim)
 
     def optimize_model(self):

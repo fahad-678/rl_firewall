@@ -33,6 +33,14 @@ MANUAL_RULES_POLL_INTERVAL = get_env_int('MANUAL_RULES_POLL_INTERVAL', 30)
 AI_RULES_PUBLISH_INTERVAL = get_env_int('AI_RULES_PUBLISH_INTERVAL', 10)
 AI_RULES_REDIS_TTL = get_env_int('AI_RULES_REDIS_TTL', 30)
 
+# AI enforcement gates. The DQN starts with epsilon=0.9 (90% random actions) and
+# can't even start learning until the replay buffer has 64 transitions. Without
+# these gates, the agent pushes ~30% random BLOCKs to the switch during early
+# training — disrupting normal traffic before the model has learned anything.
+MIN_LEARNING_STEPS = get_env_int('MIN_LEARNING_STEPS', 2000)
+ENFORCEMENT_CONFIDENCE_THRESHOLD = float(os.environ.get('ENFORCEMENT_CONFIDENCE_THRESHOLD', '0.85'))
+ENFORCEMENT_ENABLED = os.environ.get('ENFORCEMENT_ENABLED', 'true').strip().lower() not in ('false', '0', 'no', 'off')
+
 class EpochTracker:
     def __init__(self, batch_size=100):
         self.batch_size = batch_size
@@ -284,7 +292,6 @@ def process_mirrored_packet(scapy_pkt):
             ai_action = dqn_agent.select_action(state_vector)
             confidence = getattr(dqn_agent, 'get_confidence', lambda x: 1.0)(state_vector)
 
-            CONFIDENCE_THRESHOLD = 0.85
             processing_time_ms = (time.time() - timer_start) * 1000
             latency_penalty = -0.1 * processing_time_ms
 
@@ -391,22 +398,34 @@ def process_mirrored_packet(scapy_pkt):
                 except Exception as exc:
                     print(f"[Protected] Failed to feed manual feedback for {src_ip}: {exc}")
 
-            elif ai_action == 1 and confidence < CONFIDENCE_THRESHOLD:
-                blocked_states_cache[src_ip] = state_vector
-                rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=2, duration_seconds=600)
-                status = "NEEDS_REVIEW"
+            else:
+                # Enforcement gates: don't push to iptables/switch unless the
+                # decision is greedy (not random exploration), confident, past
+                # the learning warmup, and enforcement is globally enabled.
+                # The DQN still learns from the transition either way.
+                was_exploration = getattr(dqn_agent, 'last_was_exploration', False)
+                past_warmup = dqn_agent.steps_done >= MIN_LEARNING_STEPS
+                confident = confidence >= ENFORCEMENT_CONFIDENCE_THRESHOLD
 
-            elif ai_action == 0:
-                status = "ACCEPTED"
-
-            elif ai_action == 1:
-                blocked_states_cache[src_ip] = state_vector
-                rule_manager.deploy_block_rule(src_ip, duration_seconds=600)
-                status = "BLOCKED"
-
-            elif ai_action == 2:
-                rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=50, duration_seconds=300)
-                status = "RATE_LIMITED"
+                if not ENFORCEMENT_ENABLED:
+                    status = "ENFORCEMENT_DISABLED"
+                elif was_exploration:
+                    status = "EXPLORING"
+                elif not past_warmup:
+                    status = "WARMUP"
+                elif not confident:
+                    status = "LOW_CONFIDENCE"
+                elif ai_action == 0:
+                    status = "ACCEPTED"
+                elif ai_action == 1:
+                    blocked_states_cache[src_ip] = state_vector
+                    rule_manager.deploy_block_rule(src_ip, duration_seconds=600)
+                    status = "BLOCKED"
+                elif ai_action == 2:
+                    rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=50, duration_seconds=300)
+                    status = "RATE_LIMITED"
+                else:
+                    status = "ACCEPTED"
 
             send_realtime_telemetry(
                 src_ip,
