@@ -130,6 +130,7 @@ import {
   BrainCircuit,
   ClipboardList,
   ShieldAlert,
+  Bot,
   Menu,
   X,
   Bell
@@ -148,6 +149,7 @@ const navigation = [
   { name: 'Training History', href: '/training', icon: BrainCircuit, description: 'Epoch-level learning ledger' },
   { name: 'Audit Logs', href: '/audit', icon: ClipboardList, description: 'Operator intervention trail' },
   { name: 'Manual Rules', href: '/manual-rules', icon: ShieldAlert, description: 'Block/allow specific IPs' },
+  { name: 'AI Rules', href: '/ai-rules', icon: Bot, description: 'Live AI-applied firewall rules' },
 ]
 
 const pageTitle = computed(() => {
@@ -155,6 +157,8 @@ const pageTitle = computed(() => {
   if (router.currentRoute.value.name === 'AiPerformance') return 'Learning Analytics'
   if (router.currentRoute.value.name === 'TrainingHistory') return 'Training Ledger'
   if (router.currentRoute.value.name === 'AuditLogs') return 'Audit & Compliance'
+  if (router.currentRoute.value.name === 'ManualRules') return 'Manual Rules'
+  if (router.currentRoute.value.name === 'AIRules') return 'AI Rules'
   return 'RL Firewall'
 })
 

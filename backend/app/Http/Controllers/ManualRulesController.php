@@ -201,6 +201,14 @@ class ManualRulesController extends Controller
 
         DB::transaction(function () use ($validated, $systemUser, &$imported, &$removed) {
             $snapshot = collect($validated['rules'])
+                // Defense in depth: only accept ACL names that originate from the
+                // manual ruleset. The agent should already filter these, but a
+                // double-check here prevents AI-deployed ACLs from being
+                // laundered into the manual_firewall_rules table.
+                ->filter(function (array $incomingRule) {
+                    $aclName = $incomingRule['acl_name'] ?? '';
+                    return $aclName === '' || str_starts_with($aclName, 'MAN_');
+                })
                 ->map(function (array $incomingRule) {
                     $notes = $incomingRule['notes'] ?? null;
                     if (!$notes && !empty($incomingRule['acl_name'])) {
@@ -337,22 +345,22 @@ class ManualRulesController extends Controller
     }
 
     /**
-     * Validate IP or CIDR format.
+     * Validate IP or CIDR format. Manual rules are AI-immune, so we bound
+     * the prefix length to /24+ to prevent an analyst from accidentally
+     * disabling AI enforcement on a large network.
      */
     private function isValidIpOrCidr($value)
     {
-        // Check if it's a valid IPv4 address or CIDR
         if (filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             return true;
         }
 
-        // Check if it's a valid CIDR notation
         if (strpos($value, '/') !== false) {
             [$ip, $prefix] = explode('/', $value, 2);
             if (
                 filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
                 && is_numeric($prefix)
-                && (int)$prefix >= 0
+                && (int)$prefix >= 24
                 && (int)$prefix <= 32
             ) {
                 return true;

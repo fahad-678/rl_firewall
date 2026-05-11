@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AiMetricsController;
+use App\Http\Controllers\AIRulesController;
 use App\Http\Controllers\FirewallController;
 use App\Http\Controllers\ManualRulesController;
 
@@ -35,6 +36,12 @@ Route::middleware(['web', 'admin'])->group(function () {
             Route::get('/{rule}', [ManualRulesController::class, 'show']);
             Route::put('/{rule}', [ManualRulesController::class, 'update']);
             Route::delete('/{rule}', [ManualRulesController::class, 'destroy']);
+        });
+
+        // Read-only view of AI-applied rules (snapshot published by the agent).
+        Route::prefix('ai-rules')->group(function () {
+            Route::get('/', [AIRulesController::class, 'index']);
+            Route::get('/recent', [AIRulesController::class, 'recent']);
         });
     });
 });

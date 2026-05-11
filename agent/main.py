@@ -14,7 +14,7 @@ from scapy.all import IP, TCP, sniff
 # Import our custom modules
 from extraction.flow_manager import FlowManager
 from dqn.agent import DQNAgent
-from enforcement.rule_manager import RuleManager
+from enforcement.rule_manager import RuleManager, CALLER_MANUAL, CALLER_ANALYST
 
 # Runtime configuration
 REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
@@ -30,6 +30,8 @@ def get_env_int(name, default):
 
 SWITCH_SYNC_INTERVAL = get_env_int('SWITCH_SYNC_INTERVAL', 15)
 MANUAL_RULES_POLL_INTERVAL = get_env_int('MANUAL_RULES_POLL_INTERVAL', 30)
+AI_RULES_PUBLISH_INTERVAL = get_env_int('AI_RULES_PUBLISH_INTERVAL', 10)
+AI_RULES_REDIS_TTL = get_env_int('AI_RULES_REDIS_TTL', 30)
 
 class EpochTracker:
     def __init__(self, batch_size=100):
@@ -218,15 +220,12 @@ def handle_manual_rule_events():
                 continue
 
             if action in ('created', 'updated'):
-                if rule_action == 'BLOCK':
-                    print(f"[Manual Rules] Applying BLOCK for {ip_address}")
-                    rule_manager.deploy_block_rule(ip_address, duration_seconds=3600 if rule_data.get('rule_type') == 'PERMANENT' else 600)
-                elif rule_action == 'ALLOW':
-                    print(f"[Manual Rules] Applying ALLOW for {ip_address} (removing block)")
-                    rule_manager._remove_rule(normalize_block_target(ip_address))
+                port = rule_data.get('port')
+                print(f"[Manual Rules] Registering {rule_action} for {ip_address}")
+                rule_manager.register_manual_rule(ip_address, rule_action, port=port)
             elif action == 'deleted':
-                print(f"[Manual Rules] Removing rule for {ip_address}")
-                rule_manager._remove_rule(normalize_block_target(ip_address))
+                print(f"[Manual Rules] Unregistering manual rule for {ip_address}")
+                rule_manager.unregister_manual_rule(ip_address)
         except Exception as e:
             import traceback
             print(f"[Manual Rules] Error processing event: {e}")
@@ -271,6 +270,7 @@ def process_mirrored_packet(scapy_pkt):
 
     if scapy_pkt.haslayer(IP) and scapy_pkt.haslayer(TCP):
         src_ip = scapy_pkt[IP].src
+        dst_ip = scapy_pkt[IP].dst
         dst_port = scapy_pkt[TCP].dport
         flow_key = flow_manager._generate_flow_key(scapy_pkt)
 
@@ -281,7 +281,7 @@ def process_mirrored_packet(scapy_pkt):
             state_vector = [0.0 if math.isnan(x) or math.isinf(x) else float(x) for x in state_vector]
             dqn_agent.state_cache[src_ip] = state_vector
 
-            action = dqn_agent.select_action(state_vector)
+            ai_action = dqn_agent.select_action(state_vector)
             confidence = getattr(dqn_agent, 'get_confidence', lambda x: 1.0)(state_vector)
 
             CONFIDENCE_THRESHOLD = 0.85
@@ -289,14 +289,45 @@ def process_mirrored_packet(scapy_pkt):
             latency_penalty = -0.1 * processing_time_ms
 
             is_malicious = src_ip in KNOWN_MALICIOUS_IPS
-            base_reward = 0.0
 
-            if action == 1:
-                base_reward = 10.0 if is_malicious else -50.0
-            elif action == 0:
-                base_reward = -20.0 if is_malicious else 1.0
-            elif action == 2:
-                base_reward = 2.0 if is_malicious else -10.0
+            # Bidirectional protection: if EITHER endpoint of the conversation is
+            # covered by a manual rule, skip AI enforcement. Without this, the
+            # agent sees inbound responses (src=remote, dst=protected_host) and
+            # blocks the remote — cutting a manually-allowed host off the internet.
+            # When both endpoints are protected with different verdicts, BLOCK
+            # wins because that matches the iptables behavior (the BLOCK rule
+            # already drops packets in both directions at the data plane).
+            protected_src = rule_manager.is_protected(src_ip)
+            protected_dst = rule_manager.is_protected(dst_ip)
+            protected = None
+            protection_side = None
+            for candidate, side in ((protected_src, 'src'), (protected_dst, 'dst')):
+                if candidate is None:
+                    continue
+                if (candidate.get('verdict') or '').lower() == 'block':
+                    protected, protection_side = candidate, side
+                    break
+                if protected is None:
+                    protected, protection_side = candidate, side
+
+            if protected is not None:
+                manual_verdict = (protected.get('verdict') or 'allow').upper()
+                if manual_verdict == 'BLOCK':
+                    action = 1
+                    base_reward = -30.0 if ai_action != 1 else 5.0
+                else:
+                    action = 0
+                    base_reward = -30.0 if ai_action != 0 else 5.0
+            else:
+                action = ai_action
+                if action == 1:
+                    base_reward = 10.0 if is_malicious else -50.0
+                elif action == 0:
+                    base_reward = -20.0 if is_malicious else 1.0
+                elif action == 2:
+                    base_reward = 2.0 if is_malicious else -10.0
+                else:
+                    base_reward = 0.0
 
             total_reward = base_reward + latency_penalty
             loss_val = None
@@ -338,20 +369,42 @@ def process_mirrored_packet(scapy_pkt):
 
             status = "UNKNOWN"
 
-            if action == 1 and confidence < CONFIDENCE_THRESHOLD:
+            if protected is not None:
+                # Manual rule covers one endpoint of this flow — skip AI enforcement
+                # and feed supervisory feedback so the DQN learns the analyst's verdict.
+                is_block_verdict = (protected.get('verdict') or '').lower() == 'block'
+                if protection_side == 'dst':
+                    # Inbound response to a protected host. We always want this
+                    # traffic to flow, regardless of the manual rule's verdict
+                    # against the remote endpoint.
+                    status = "PARTNER_OF_MANUAL_ALLOW"
+                    correct_label = 'ALLOW'
+                else:
+                    status = "BLOCKED_BY_MANUAL" if is_block_verdict else "ALLOWED_BY_MANUAL"
+                    correct_label = 'BLOCK' if is_block_verdict else 'ALLOW'
+                try:
+                    dqn_agent.apply_human_feedback(
+                        src_ip=src_ip,
+                        correct_action_label=correct_label,
+                        original_action_label='BLOCK' if ai_action == 1 else ('ALLOW' if ai_action == 0 else 'RATE_LIMIT'),
+                    )
+                except Exception as exc:
+                    print(f"[Protected] Failed to feed manual feedback for {src_ip}: {exc}")
+
+            elif ai_action == 1 and confidence < CONFIDENCE_THRESHOLD:
                 blocked_states_cache[src_ip] = state_vector
                 rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=2, duration_seconds=600)
                 status = "NEEDS_REVIEW"
 
-            elif action == 0:
+            elif ai_action == 0:
                 status = "ACCEPTED"
 
-            elif action == 1:
+            elif ai_action == 1:
                 blocked_states_cache[src_ip] = state_vector
                 rule_manager.deploy_block_rule(src_ip, duration_seconds=600)
                 status = "BLOCKED"
 
-            elif action == 2:
+            elif ai_action == 2:
                 rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=50, duration_seconds=300)
                 status = "RATE_LIMITED"
 
@@ -403,10 +456,18 @@ def handle_human_overrides():
                 decision = data.get('decision', 'ALLOW') 
                 
                 if override_ip:
+                    protected_entry = rule_manager.is_protected(override_ip)
+                    if protected_entry is not None:
+                        print(f"[Override] Refused: {override_ip} is covered by a manual rule "
+                              f"({protected_entry.get('cidr')} verdict={protected_entry.get('verdict')}). "
+                              f"Delete it from Manual Rules to change enforcement.")
+                        continue
+
                     # 1. Enforce the Rule immediately via iptables
                     if decision == 'ALLOW':
                         print(f"\n[!] ANALYST ALLOWED IP: {override_ip}")
-                        rule_manager._remove_rule(override_ip)
+                        with rule_manager.lock:
+                            rule_manager._remove_rule(override_ip, caller=CALLER_ANALYST)
                     elif decision == 'BLOCK':
                         print(f"\n[!] ANALYST BLOCKED IP: {override_ip}")
                         rule_manager.deploy_block_rule(override_ip, duration_seconds=600)
@@ -450,28 +511,21 @@ def handle_manual_rules():
                 for rule in data['rules']:
                     rule_key = f"{rule.get('ip_address')}_{rule.get('port', 'any')}"
                     current_rules[rule_key] = rule
-                    
-                    # Check if this is a new rule
+
                     if rule_key not in last_rules:
                         ip_address = rule.get('ip_address')
                         action = rule.get('action')
-                        
-                        if action == 'BLOCK':
-                            print(f"[Manual] Applying BLOCK rule for IP: {ip_address}")
-                            rule_manager.deploy_block_rule(ip_address, duration_seconds=3600)
-                        elif action == 'ALLOW':
-                            print(f"[Manual] Applying ALLOW rule for IP: {ip_address}")
-                            # For ALLOW, we remove any existing block for this IP
-                            rule_manager._remove_rule(normalize_block_target(ip_address))
-                
-                # Check for deleted rules (exist in last_rules but not in current_rules)
+                        port = rule.get('port')
+                        print(f"[Manual] Registering {action} rule for IP: {ip_address}")
+                        rule_manager.register_manual_rule(ip_address, action, port=port)
+
                 for rule_key in list(last_rules.keys()):
                     if rule_key not in current_rules:
                         old_rule = last_rules[rule_key]
                         ip_address = old_rule.get('ip_address')
-                        print(f"[Manual] Removing rule for IP: {ip_address}")
-                        rule_manager._remove_rule(normalize_block_target(ip_address))
-                
+                        print(f"[Manual] Unregistering manual rule for IP: {ip_address}")
+                        rule_manager.unregister_manual_rule(ip_address)
+
                 last_rules = current_rules
                 
         except requests.exceptions.Timeout:
@@ -488,6 +542,48 @@ def handle_manual_rules():
             print(f"[Manual Rules] Traceback: {traceback.format_exc()}")
             time.sleep(5)  # Wait before retry on error
 
+def publish_ai_rules_worker():
+    """Snapshot AI-origin active rules to Redis so the dashboard can read them."""
+    if not redis_client:
+        print("[AI Rules] Redis client unavailable; AI rules view will be empty.")
+        return
+
+    print(f"[AI Rules] Publishing snapshot every {AI_RULES_PUBLISH_INTERVAL}s "
+          f"(key TTL {AI_RULES_REDIS_TTL}s)...")
+
+    while True:
+        try:
+            # Snapshot under the lock, serialize after release.
+            with rule_manager.lock:
+                snapshot_items = [
+                    (cidr, dict(data)) for cidr, data in rule_manager.active_rules.items()
+                    if data.get('origin') == 'ai'
+                ]
+
+            payload = []
+            for cidr, data in snapshot_items:
+                expires_at = data.get('expiration')
+                payload.append({
+                    'ip_address': cidr.split('/')[0],
+                    'cidr': cidr,
+                    'verdict': data.get('verdict', data.get('type')),
+                    'expires_at': None if expires_at in (None, math.inf) else float(expires_at),
+                    'expires_in': None if expires_at in (None, math.inf) else max(0, float(expires_at) - time.time()),
+                    'rule_id': data.get('rule_id'),
+                    'port': data.get('port'),
+                })
+
+            try:
+                redis_client.setex('ai-active-rules', AI_RULES_REDIS_TTL, json.dumps(payload))
+                redis_client.setex('ai-agent-heartbeat', AI_RULES_REDIS_TTL, str(int(time.time())))
+            except Exception as e:
+                print(f"[AI Rules] Failed to publish snapshot: {e}")
+        except Exception as e:
+            print(f"[AI Rules] Snapshot loop error: {e}")
+
+        time.sleep(AI_RULES_PUBLISH_INTERVAL)
+
+
 def sync_switch_rules_worker():
     """Periodically sync switch ACLs into the backend so switch state stays authoritative."""
     if not MANUAL_RULES_SYNC_TOKEN:
@@ -503,6 +599,15 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup_iptables)
     signal.signal(signal.SIGTERM, cleanup_iptables)
     setup_iptables()
+
+    # Rehydrate the in-memory active_rules dict from AI ACLs already on the switch
+    # so a restart doesn't blank out the dashboard's AI Rules view.
+    try:
+        rehydrated = rule_manager.rehydrate_from_switch()
+        if rehydrated:
+            print(f"[Startup] Rehydrated {rehydrated} AI rule(s) from switch ACLs.")
+    except Exception as e:
+        print(f"[Startup] Failed to rehydrate AI rules from switch: {e}")
 
     # One-time import of switch ACLs into the dashboard store.
     import_switch_rules_to_backend()
@@ -522,6 +627,10 @@ if __name__ == "__main__":
     # Start the Switch Sync thread as a daemon thread
     switch_sync_thread = threading.Thread(target=sync_switch_rules_worker, daemon=True)
     switch_sync_thread.start()
+
+    # Publish AI-rule snapshots to Redis so the dashboard can read them.
+    publish_ai_rules_thread = threading.Thread(target=publish_ai_rules_worker, daemon=True)
+    publish_ai_rules_thread.start()
 
     # Start Scapy sniffing on the mirrored interface (read-only)
     try:

@@ -2,7 +2,7 @@
   <div class="min-h-screen bg-slate-950 text-white">
     <div class="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
       <!-- Header -->
-      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div>
           <h1 class="text-3xl font-bold">Manual IP Rules</h1>
           <p class="text-slate-400 mt-2">Create and manage firewall rules for blocking or allowing specific IP addresses</p>
@@ -21,6 +21,13 @@
             + New Rule
           </button>
         </div>
+      </div>
+
+      <div class="mb-6 rounded-xl border border-cyan-700/50 bg-cyan-900/20 px-4 py-3 text-sm text-cyan-200">
+        <span class="font-semibold">Protected:</span>
+        All manual rules below are immune to AI overrides. While a rule is active, the AI cannot
+        block an IP you allowed or unblock an IP you blocked. The AI is shown the rule as supervisory
+        feedback so it learns your decisions.
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
