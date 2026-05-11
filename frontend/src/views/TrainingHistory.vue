@@ -76,9 +76,13 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import { RefreshCw, AlertCircle } from 'lucide-vue-next'
+import { formatError } from '../utils/formatError'
+
+const REFRESH_MS = 30_000
+let refreshTimer = null
 
 const logs = ref([])
 const isLoading = ref(true)
@@ -109,22 +113,32 @@ const blockEfficiency = computed(() => {
   return Math.round((totals.blocked / total) * 100)
 })
 
-const fetchLogs = async () => {
-  isLoading.value = true
-  error.value = null
-  
+const fetchLogs = async ({ silent = false } = {}) => {
+  if (!silent) {
+    isLoading.value = true
+    error.value = null
+  }
+
   try {
     const response = await axios.get('/api/ai/logs')
     logs.value = response.data
+    error.value = null
   } catch (err) {
     console.error("Failed to fetch training logs:", err)
-    error.value = "Failed to load historical data."
+    if (!silent) error.value = formatError(err, 'Failed to load historical data.')
   } finally {
-    isLoading.value = false
+    if (!silent) isLoading.value = false
   }
 }
 
+const silentRefresh = () => fetchLogs({ silent: true }).catch(() => {})
+
 onMounted(() => {
   fetchLogs()
+  refreshTimer = setInterval(silentRefresh, REFRESH_MS)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
 })
 </script>

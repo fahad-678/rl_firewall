@@ -112,9 +112,6 @@ rule_manager = RuleManager(
     ssh_key_passphrase=mgmt_key_passphrase,
 )
 
-# Simulated labels for offline reward shaping.
-KNOWN_MALICIOUS_IPS = {"192.168.1.100", "10.0.0.50", "172.16.0.23"}
-
 # Tracks prior transitions by flow key to build (S, A, R, S').
 flow_states = {}
 blocked_states_cache = {}
@@ -295,8 +292,6 @@ def process_mirrored_packet(scapy_pkt):
             processing_time_ms = (time.time() - timer_start) * 1000
             latency_penalty = -0.1 * processing_time_ms
 
-            is_malicious = src_ip in KNOWN_MALICIOUS_IPS
-
             # Bidirectional protection: if EITHER endpoint of the conversation is
             # covered by a manual rule, skip AI enforcement. Without this, the
             # agent sees inbound responses (src=remote, dst=protected_host) and
@@ -326,15 +321,13 @@ def process_mirrored_packet(scapy_pkt):
                     action = 0
                     base_reward = -30.0 if ai_action != 0 else 5.0
             else:
+                # No ground-truth label exists at runtime. Online RL learns
+                # only from real supervision (manual rules above, human
+                # overrides via `apply_human_feedback`). Everything else gets
+                # a neutral reward so the pretrained policy isn't poisoned by
+                # a fake heuristic.
                 action = ai_action
-                if action == 1:
-                    base_reward = 10.0 if is_malicious else -50.0
-                elif action == 0:
-                    base_reward = -20.0 if is_malicious else 1.0
-                elif action == 2:
-                    base_reward = 2.0 if is_malicious else -10.0
-                else:
-                    base_reward = 0.0
+                base_reward = 0.0
 
             total_reward = base_reward + latency_penalty
             loss_val = None
@@ -435,7 +428,6 @@ def process_mirrored_packet(scapy_pkt):
                 flow_key=flow_key,
                 reward=float(total_reward),
                 latency_ms=float(processing_time_ms),
-                is_malicious=is_malicious,
                 terminal=is_terminal,
             )
 
@@ -448,7 +440,6 @@ def process_mirrored_packet(scapy_pkt):
                     "reward": float(total_reward),
                     "latency_ms": float(processing_time_ms),
                     "flow_key": flow_key,
-                    "is_malicious": is_malicious,
                     "terminal": is_terminal,
                 }
                 redis_client.publish('firewall-telemetry', json.dumps(telemetry_data))

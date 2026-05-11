@@ -32,7 +32,6 @@ class FirewallController extends Controller
             'flow_key'     => 'nullable|string',
             'reward'       => 'nullable|numeric',
             'latency_ms'   => 'nullable|numeric',
-            'is_malicious' => 'nullable|boolean',
             'terminal'     => 'nullable|boolean',
         ]);
 
@@ -46,7 +45,6 @@ class FirewallController extends Controller
                 'flow_key'     => $validated['flow_key'] ?? null,
                 'reward'       => $validated['reward'] ?? null,
                 'latency_ms'   => $validated['latency_ms'] ?? null,
-                'is_malicious' => $validated['is_malicious'] ?? null,
                 'terminal'     => $validated['terminal'] ?? null,
                 'raw_payload'  => $request->all(),
             ]);

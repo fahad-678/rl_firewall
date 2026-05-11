@@ -110,9 +110,13 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
 import { RefreshCw, AlertCircle, ClipboardList } from 'lucide-vue-next'
+import { formatError } from '../utils/formatError'
+
+const REFRESH_MS = 30_000
+let refreshTimer = null
 
 const logs = ref([])
 const isLoading = ref(true)
@@ -129,28 +133,28 @@ const blockDecisions = computed(() => logs.value.filter(log => log.decision === 
 const allowDecisions = computed(() => logs.value.filter(log => log.decision === 'ALLOW').length)
 const notedDecisions = computed(() => logs.value.filter(log => Boolean(log.notes)).length)
 
-const fetchAuditLogs = async (page = 1) => {
-  isLoading.value = true
-  error.value = null
-  
+const fetchAuditLogs = async (page = 1, { silent = false } = {}) => {
+  if (!silent) {
+    isLoading.value = true
+    error.value = null
+  }
+
   try {
-    // Pass the page number to Laravel
     const response = await axios.get(`/api/firewall/interventions?page=${page}`)
-    
-    // Extract the actual array of logs from Laravel's 'data' wrapper
+
     logs.value = response.data.data
-    
-    // Update our local pagination state
+
     pagination.value = {
       currentPage: response.data.current_page,
       lastPage: response.data.last_page,
       total: response.data.total
     }
+    error.value = null
   } catch (err) {
     console.error("Failed to fetch audit logs:", err)
-    error.value = "Failed to load the audit trail."
+    if (!silent) error.value = formatError(err, 'Failed to load the audit trail.')
   } finally {
-    isLoading.value = false
+    if (!silent) isLoading.value = false
   }
 }
 
@@ -159,6 +163,9 @@ const changePage = (newPage) => {
     fetchAuditLogs(newPage)
   }
 }
+
+const silentRefresh = () =>
+  fetchAuditLogs(pagination.value.currentPage, { silent: true }).catch(() => {})
 
 const describeContext = (log) => {
   const parts = []
@@ -181,5 +188,10 @@ const describeContext = (log) => {
 
 onMounted(() => {
   fetchAuditLogs()
+  refreshTimer = setInterval(silentRefresh, REFRESH_MS)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
 })
 </script>

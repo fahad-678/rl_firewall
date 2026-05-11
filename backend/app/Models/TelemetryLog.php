@@ -19,7 +19,6 @@ class TelemetryLog extends Model
         'flow_key',
         'reward',
         'latency_ms',
-        'is_malicious',
         'terminal',
         'raw_payload',
     ];
@@ -28,7 +27,6 @@ class TelemetryLog extends Model
         'confidence'  => 'float',
         'reward'      => 'float',
         'latency_ms'  => 'float',
-        'is_malicious' => 'boolean',
         'terminal'    => 'boolean',
         'raw_payload' => 'array',
         'created_at'  => 'datetime',

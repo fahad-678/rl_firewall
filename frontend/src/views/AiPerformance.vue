@@ -19,6 +19,10 @@
       </div>
     </section>
 
+    <div v-if="error" class="soc-panel rounded-2xl p-4 text-sm text-rose-300 flex items-center gap-2">
+      <AlertCircle class="w-5 h-5" /> {{ error }}
+    </div>
+
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <article class="soc-panel rounded-xl p-4">
         <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Latest Reward</p>
@@ -70,18 +74,23 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import axios from 'axios'
+import { AlertCircle } from 'lucide-vue-next'
 import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement,
   LineElement, Title, Tooltip, Legend, Filler
 } from 'chart.js'
 import { Line } from 'vue-chartjs'
+import { formatError } from '../utils/formatError'
 
-// Register Chart.js components
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler)
 
+const REFRESH_MS = 30_000
+let refreshTimer = null
+
 const isLoading = ref(true)
+const error = ref(null)
 const chartData = ref({ labels: [], datasets: [] })
 const rewardValues = ref([])
 
@@ -142,15 +151,15 @@ const learningMomentum = computed(() => {
   return 'stable'
 })
 
-const fetchData = async () => {
-  isLoading.value = true
+const fetchData = async ({ silent = false } = {}) => {
+  if (!silent) isLoading.value = true
   try {
     const response = await axios.get('/api/ai/performance')
-    
+
     rewardValues.value = response.data.rewards || []
 
     chartData.value = {
-      labels: response.data.epochs, // e.g., ["Epoch 1", "Epoch 2", ...]
+      labels: response.data.epochs,
       datasets: [
         {
           label: 'Reward Signal',
@@ -167,14 +176,23 @@ const fetchData = async () => {
         }
       ]
     }
-  } catch (error) {
-    console.error("Failed to load AI performance data:", error)
+    error.value = null
+  } catch (err) {
+    console.error("Failed to load AI performance data:", err)
+    if (!silent) error.value = formatError(err, 'Failed to load AI performance data.')
   } finally {
-    isLoading.value = false
+    if (!silent) isLoading.value = false
   }
 }
 
+const silentRefresh = () => fetchData({ silent: true }).catch(() => {})
+
 onMounted(() => {
   fetchData()
+  refreshTimer = setInterval(silentRefresh, REFRESH_MS)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
 })
 </script>
