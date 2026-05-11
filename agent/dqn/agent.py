@@ -8,15 +8,18 @@ import torch.nn.functional as F
 from .model import FirewallDQN
 from .replay_buffer import ExperienceReplay
 class DQNAgent:
-    def __init__(self, input_dim=10, action_dim=3, lr=1e-3, gamma=0.99, batch_size=64):
+    def __init__(self, input_dim=10, action_dim=3, lr=1e-3, gamma=0.99, batch_size=64,
+                 epsilon_start=0.9, epsilon_end=0.05, epsilon_decay=1000):
         self.action_dim = action_dim
         self.gamma = gamma
         self.batch_size = batch_size
-        
-        # Epsilon-greedy exploration parameters.
-        self.epsilon_start = 0.9
-        self.epsilon_end = 0.05
-        self.epsilon_decay = 1000
+
+        # Epsilon-greedy exploration parameters. Defaults match cold-start RL.
+        # For a deployed pretrained model, callers should pass 0.0 / 0.0 so
+        # every action is greedy — there's nothing to explore.
+        self.epsilon_start = epsilon_start
+        self.epsilon_end = epsilon_end
+        self.epsilon_decay = epsilon_decay
         self.steps_done = 0
 
         # Online network and frozen target network.
@@ -92,9 +95,13 @@ class DQNAgent:
         """Persists the current policy network weights."""
         torch.save(self.policy_net.state_dict(), path)
     
-    def get_confidence(self, state_vector, temperature=2.0):
+    def get_confidence(self, state_vector, temperature=1.0):
         """
         Converts Q-values into a confidence score via temperature-scaled softmax.
+
+        Temperature=1.0 trusts the network's raw softmax. The CE-pretrained
+        weights are already well-calibrated, so an artificial softening (T=2)
+        would push almost every prediction below the 0.85 enforcement gate.
         """
         with torch.no_grad():
             state_tensor = torch.tensor([state_vector], dtype=torch.float32)

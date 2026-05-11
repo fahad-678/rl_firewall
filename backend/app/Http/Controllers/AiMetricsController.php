@@ -29,9 +29,22 @@ class AiMetricsController extends Controller
 
     /**
      * Store a new training epoch log from the Python RL Agent.
+     *
+     * Called by the agent without a browser session, so this endpoint sits
+     * outside the admin middleware group and authenticates via the shared
+     * X-Rule-Sync-Token header — same pattern as POST /firewall/telemetry.
      */
     public function store(Request $request)
     {
+        $token = (string) $request->header('X-Rule-Sync-Token', '');
+        $expectedToken = (string) config('app.rule_sync_token', env('RULE_SYNC_TOKEN', ''));
+
+        if ($expectedToken === '' || !hash_equals($expectedToken, $token)) {
+            return response()->json([
+                'message' => 'Unauthorized AI metrics request.',
+            ], 401);
+        }
+
         $validated = $request->validate([
             'epoch'             => 'required|integer',
             'epsilon'           => 'required|numeric',

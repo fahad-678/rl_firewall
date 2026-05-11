@@ -8,10 +8,9 @@ use App\Http\Controllers\ManualRulesController;
 
 // Protected routes (require authentication via admin middleware + web session)
 Route::middleware(['web', 'admin'])->group(function () {
-    // AI Performance & Training Routes
+    // AI Performance & Training Routes (browser-side, session-authed reads)
     Route::prefix('ai')->group(function () {
         Route::get('/performance', [AiMetricsController::class, 'getPerformanceData']);
-        Route::post('/performance', [AiMetricsController::class, 'store']);
         Route::get('/logs', [AiMetricsController::class, 'getTrainingLogs']);
     });
 
@@ -46,9 +45,10 @@ Route::middleware(['web', 'admin'])->group(function () {
     });
 });
 
-// Telemetry ingestion is called by the Python agent, so it uses the shared sync token
-// instead of browser session auth.
+// Endpoints called by the Python agent — authenticated via X-Rule-Sync-Token
+// header instead of browser session, because the agent has no Laravel session.
 Route::post('/firewall/telemetry', [FirewallController::class, 'receiveTelemetry']);
+Route::post('/ai/performance', [AiMetricsController::class, 'store']);
 
 Route::post('/firewall/rules/import-switch', [ManualRulesController::class, 'importSwitchRules']);
 Route::get('/firewall/rules/active-sync', [ManualRulesController::class, 'getActiveSync']);

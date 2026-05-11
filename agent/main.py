@@ -28,16 +28,23 @@ def get_env_int(name, default):
     except (TypeError, ValueError):
         return default
 
+def get_env_float(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
 SWITCH_SYNC_INTERVAL = get_env_int('SWITCH_SYNC_INTERVAL', 15)
 MANUAL_RULES_POLL_INTERVAL = get_env_int('MANUAL_RULES_POLL_INTERVAL', 30)
 AI_RULES_PUBLISH_INTERVAL = get_env_int('AI_RULES_PUBLISH_INTERVAL', 10)
 AI_RULES_REDIS_TTL = get_env_int('AI_RULES_REDIS_TTL', 30)
 
-# AI enforcement gates. The DQN starts with epsilon=0.9 (90% random actions) and
-# can't even start learning until the replay buffer has 64 transitions. Without
-# these gates, the agent pushes ~30% random BLOCKs to the switch during early
-# training — disrupting normal traffic before the model has learned anything.
-MIN_LEARNING_STEPS = get_env_int('MIN_LEARNING_STEPS', 2000)
+# AI enforcement gates. Defaults assume a pretrained model in deployment:
+# no warmup needed and no exploration. Set MIN_LEARNING_STEPS / EPSILON_START
+# back up if you want cold-start RL behavior.
+MIN_LEARNING_STEPS = get_env_int('MIN_LEARNING_STEPS', 0)
+EPSILON_START = get_env_float('EPSILON_START', 0.0)
+EPSILON_END = get_env_float('EPSILON_END', 0.0)
 ENFORCEMENT_CONFIDENCE_THRESHOLD = float(os.environ.get('ENFORCEMENT_CONFIDENCE_THRESHOLD', '0.85'))
 ENFORCEMENT_ENABLED = os.environ.get('ENFORCEMENT_ENABLED', 'true').strip().lower() not in ('false', '0', 'no', 'off')
 
@@ -96,7 +103,10 @@ except Exception as e:
 
 # Initialize core components.
 flow_manager = FlowManager(window_size=10)
-dqn_agent = DQNAgent(input_dim=12, action_dim=3)
+dqn_agent = DQNAgent(
+    input_dim=12, action_dim=3,
+    epsilon_start=EPSILON_START, epsilon_end=EPSILON_END,
+)
 # Initialize RuleManager from environment (env overrides defaults)
 mode = os.environ.get('FIREWALL_MODE', 'simulation')
 mgmt_ip = os.environ.get('ICX_MGMT_IP', '192.168.1.1')
@@ -127,10 +137,17 @@ def metrics_worker():
     while True:
         payload = metrics_queue.get()
         try:
-            requests.post("http://localhost/api/ai/performance", json=payload, timeout=2)
-            print(f"✅ [API] Epoch {payload['epoch']} metrics saved.")
-        except Exception:
-            pass
+            headers = {'X-Rule-Sync-Token': RULE_SYNC_TOKEN} if RULE_SYNC_TOKEN else {}
+            resp = requests.post(
+                "http://localhost/api/ai/performance",
+                json=payload, headers=headers, timeout=2,
+            )
+            if resp.status_code in (200, 201):
+                print(f"✅ [API] Epoch {payload['epoch']} metrics saved.")
+            else:
+                print(f"⚠️ [API] Epoch {payload['epoch']} rejected: HTTP {resp.status_code}")
+        except Exception as e:
+            print(f"⚠️ [API] Epoch {payload['epoch']} failed: {e}")
         metrics_queue.task_done()
 
 threading.Thread(target=metrics_worker, daemon=True).start()
@@ -334,22 +351,28 @@ def process_mirrored_packet(scapy_pkt):
 
             if flow_key in flow_states:
                 prev = flow_states[flow_key]
-                dqn_agent.memory.push(
-                    state=prev['state'], action=prev['action'], reward=prev['reward'],
-                    next_state=state_vector, done=1 if is_terminal else 0
-                )
-                loss_val = dqn_agent.optimize_model()
-                if dqn_agent.steps_done % 1000 == 0:
-                    dqn_agent.update_target_network()
-                    try:
-                        if hasattr(dqn_agent, 'save'):
-                            dqn_agent.save("firewall_weights.pth")
-                        else:
-                            import torch
-                            torch.save(dqn_agent.policy_net.state_dict(), "firewall_weights.pth")
-                        print(f"[*] Checkpoint reached (Step {dqn_agent.steps_done}): Model weights saved to disk.")
-                    except Exception:
-                        pass
+                # Only train on transitions that came from real supervision (a
+                # manual rule covering the flow). Pushing unsupervised
+                # transitions would drift the pretrained Q-values toward the
+                # latency-penalty noise floor since base_reward is 0 for those.
+                # Human-override training runs separately via apply_human_feedback.
+                if prev.get('supervised', False):
+                    dqn_agent.memory.push(
+                        state=prev['state'], action=prev['action'], reward=prev['reward'],
+                        next_state=state_vector, done=1 if is_terminal else 0
+                    )
+                    loss_val = dqn_agent.optimize_model()
+                    if dqn_agent.steps_done % 1000 == 0:
+                        dqn_agent.update_target_network()
+                        try:
+                            if hasattr(dqn_agent, 'save'):
+                                dqn_agent.save("firewall_weights.pth")
+                            else:
+                                import torch
+                                torch.save(dqn_agent.policy_net.state_dict(), "firewall_weights.pth")
+                            print(f"[*] Checkpoint reached (Step {dqn_agent.steps_done}): Model weights saved to disk.")
+                        except Exception:
+                            pass
 
             epoch_tracker.record_step(action, total_reward, loss_val)
             if epoch_tracker.is_ready():
@@ -364,7 +387,8 @@ def process_mirrored_packet(scapy_pkt):
                 flow_states[flow_key] = {
                     'state': state_vector,
                     'action': action,
-                    'reward': total_reward
+                    'reward': total_reward,
+                    'supervised': protected is not None,
                 }
 
             status = "UNKNOWN"
@@ -544,8 +568,6 @@ def handle_manual_rules():
             print(f"[Manual Rules] Connection error fetching rules: {e}")
         except requests.exceptions.HTTPError as e:
             print(f"[Manual Rules] HTTP error fetching rules: {e}")
-            if hasattr(e.response, 'text'):
-                print(f"[Manual Rules] Response body: {e.response.text}")
         except Exception as e:
             import traceback
             print(f"[Manual Rules] Error fetching rules: {e}")
