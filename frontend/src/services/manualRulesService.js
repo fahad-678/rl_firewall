@@ -56,6 +56,13 @@ const manualRulesService = {
   deleteRule(id) {
     return axios.delete(`${API_URL}/${id}`);
   },
+
+  /**
+   * Delete all currently active rules
+   */
+  clearActiveRules() {
+    return axios.delete(`${API_URL}/active`);
+  },
 };
 
 export default manualRulesService;

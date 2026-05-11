@@ -4,3 +4,4 @@ redis==5.0.1             # Pub/Sub telemetry broadcasting
 requests==2.31.0         # HTTP client for RESTCONF API calls
 numpy==1.26.0            # Matrix operations for state vectors
 netmiko==4.2.0           # SSH network device automation for ACL push
+paramiko==2.11.0         # Legacy KEX support for ICX SSH compatibility

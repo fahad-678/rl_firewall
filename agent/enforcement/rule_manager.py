@@ -5,8 +5,10 @@ import subprocess
 import requests
 try:
     from netmiko import ConnectHandler
+    import paramiko
 except Exception:
     ConnectHandler = None
+    paramiko = None
 import json
 import ipaddress
 import re
@@ -29,7 +31,13 @@ class RuleManager:
         self.auth = auth
         self.ssh_key_file = ssh_key_file or os.environ.get("ICX_KEY_FILE")
         self.ssh_key_passphrase = ssh_key_passphrase or os.environ.get("ICX_KEY_PASSPHRASE")
-        self.block_interface = os.environ.get("SWITCH_BLOCK_INTERFACE", "ve 1")
+        self.block_interface = os.environ.get("SWITCH_BLOCK_INTERFACE", "ve 10")
+        self.ssh_kex_algorithms = self._parse_ssh_algorithms(
+            os.environ.get("ICX_SSH_KEX_ALGORITHMS", "diffie-hellman-group14-sha1")
+        )
+        self.ssh_hostkey_algorithms = self._parse_ssh_algorithms(
+            os.environ.get("ICX_SSH_HOSTKEY_ALGORITHMS", "ssh-rsa")
+        )
         
         # Format: {'cidr': {'expiration': float, 'rule_id': str, 'network': IPv4Network}}
         self.active_rules = {}  
@@ -59,8 +67,42 @@ class RuleManager:
 
         return device
 
+    def _parse_ssh_algorithms(self, value):
+        if not value:
+            return []
+        return [item.strip() for item in value.split(',') if item.strip()]
+
+    def _extend_paramiko_preferences(self, attr_names, algorithms, label):
+        if not algorithms or paramiko is None:
+            return
+
+        transport = paramiko.transport.Transport
+
+        if label == 'kex' and hasattr(transport, '_kex_info'):
+            supported = set(transport._kex_info.keys())
+            algorithms = [algo for algo in algorithms if algo in supported]
+            if not algorithms:
+                print(f"[SSH ACL] No supported {label} algorithms found in overrides.")
+                return
+
+        for attr_name in attr_names:
+            if hasattr(transport, attr_name):
+                current = list(getattr(transport, attr_name))
+                for algo in algorithms:
+                    if algo not in current:
+                        current.append(algo)
+                setattr(transport, attr_name, current)
+                return
+
+        print(f"[SSH ACL] Paramiko does not expose {label} preferences to override.")
+
+    def _apply_paramiko_compat(self):
+        self._extend_paramiko_preferences(['_preferred_kex'], self.ssh_kex_algorithms, 'kex')
+        self._extend_paramiko_preferences(['_preferred_keys', '_preferred_pubkeys'], self.ssh_hostkey_algorithms, 'hostkey')
+
     def _connect_ssh(self):
         """Connect with key auth first, then fall back to password auth."""
+        self._apply_paramiko_compat()
         attempts = []
         if self.ssh_key_file:
             attempts.append(self._build_ssh_device(use_key_auth=True))
@@ -268,7 +310,9 @@ class RuleManager:
 
     def _remove_rule(self, target_cidr: str):
         """Automatically issues deletion commands based on rule type."""
-        
+        if '/' not in target_cidr and target_cidr not in self.active_rules:
+            target_cidr = f"{target_cidr}/32"
+
         rule_data = self.active_rules.get(target_cidr, {})
         rule_type = rule_data.get('type', 'block')
         clean_ip = target_cidr.split('/')[0]
@@ -318,7 +362,7 @@ class RuleManager:
         """Return block rules currently configured on the switch."""
         if ConnectHandler is None:
             print("[SSH ACL] netmiko not available in this environment.")
-            return []
+            return None
 
         try:
             conn = self._connect_ssh()
@@ -326,7 +370,7 @@ class RuleManager:
             conn.disconnect()
         except Exception as e:
             print(f"[SSH ACL ERROR] Failed to read switch ACLs: {e}")
-            return []
+            return None
 
         rules = []
         current_acl = None
@@ -345,7 +389,7 @@ class RuleManager:
                 seen_ips.clear()
                 continue
 
-            if current_acl_name and line.lower().startswith('10: deny ip'):
+            if current_acl_name and re.match(r'^\d+:\s*deny ip', line, re.IGNORECASE):
                 # Capture both "deny ip host X any" and "deny ip any host X" patterns
                 host_match = re.search(r'deny ip host ([0-9.]+) any', line, re.IGNORECASE)
                 if not host_match:

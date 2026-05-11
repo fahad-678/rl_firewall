@@ -31,6 +31,7 @@ Route::middleware(['web', 'admin'])->group(function () {
             Route::get('/', [ManualRulesController::class, 'index']);
             Route::post('/', [ManualRulesController::class, 'store']);
             Route::get('/active', [ManualRulesController::class, 'getActive']);
+            Route::delete('/active', [ManualRulesController::class, 'destroyActive']);
             Route::get('/{rule}', [ManualRulesController::class, 'show']);
             Route::put('/{rule}', [ManualRulesController::class, 'update']);
             Route::delete('/{rule}', [ManualRulesController::class, 'destroy']);

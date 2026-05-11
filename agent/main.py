@@ -22,6 +22,15 @@ CAPTURE_IFACE = os.environ.get('CAPTURE_IFACE', 'eth1')
 RULE_SYNC_TOKEN = os.environ.get('RULE_SYNC_TOKEN', '')
 ACTIVE_RULES_SYNC_URL = os.environ.get('ACTIVE_RULES_SYNC_URL', 'http://localhost/api/firewall/rules/active-sync')
 
+def get_env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+SWITCH_SYNC_INTERVAL = get_env_int('SWITCH_SYNC_INTERVAL', 15)
+MANUAL_RULES_POLL_INTERVAL = get_env_int('MANUAL_RULES_POLL_INTERVAL', 30)
+
 class EpochTracker:
     def __init__(self, batch_size=100):
         self.batch_size = batch_size
@@ -148,16 +157,16 @@ def telemetry_worker():
 
 threading.Thread(target=telemetry_worker, daemon=True).start()
 
-def import_switch_rules_to_backend():
+def import_switch_rules_to_backend(context="Switch Import"):
     """Reads switch ACLs and imports them into the backend dashboard store."""
     if not MANUAL_RULES_SYNC_TOKEN:
-        print("[Switch Import] RULE_SYNC_TOKEN is not set; skipping ACL import.")
+        print(f"[{context}] RULE_SYNC_TOKEN is not set; skipping ACL import.")
         return
 
     try:
         switch_rules = rule_manager.list_switch_block_rules()
-        if not switch_rules:
-            print("[Switch Import] No ACL rules found on switch.")
+        if switch_rules is None:
+            print(f"[{context}] Failed to read switch ACLs; skipping import.")
             return
 
         response = requests.post(
@@ -167,9 +176,17 @@ def import_switch_rules_to_backend():
             timeout=10,
         )
         response.raise_for_status()
-        print(f"[Switch Import] Imported {len(switch_rules)} switch ACL rule(s) into backend.")
+        if switch_rules:
+            print(f"[{context}] Imported {len(switch_rules)} switch ACL rule(s) into backend.")
+        else:
+            print(f"[{context}] Switch ACL list is empty; backend state cleared.")
     except Exception as e:
-        print(f"[Switch Import] Failed to import switch rules: {e}")
+        print(f"[{context}] Failed to import switch rules: {e}")
+
+def normalize_block_target(ip_address):
+    if not ip_address:
+        return ip_address
+    return ip_address if '/' in ip_address else f"{ip_address}/32"
 
 def handle_manual_rule_events():
     """Listen for manual rule updates and push them to the switch immediately."""
@@ -206,10 +223,10 @@ def handle_manual_rule_events():
                     rule_manager.deploy_block_rule(ip_address, duration_seconds=3600 if rule_data.get('rule_type') == 'PERMANENT' else 600)
                 elif rule_action == 'ALLOW':
                     print(f"[Manual Rules] Applying ALLOW for {ip_address} (removing block)")
-                    rule_manager._remove_rule(ip_address)
+                    rule_manager._remove_rule(normalize_block_target(ip_address))
             elif action == 'deleted':
                 print(f"[Manual Rules] Removing rule for {ip_address}")
-                rule_manager._remove_rule(ip_address)
+                rule_manager._remove_rule(normalize_block_target(ip_address))
         except Exception as e:
             import traceback
             print(f"[Manual Rules] Error processing event: {e}")
@@ -414,10 +431,10 @@ def handle_manual_rules():
     and applies them via the rule manager.
     """
     last_rules = {}
-    poll_interval = 30  # Poll every 30 seconds
+    poll_interval = MANUAL_RULES_POLL_INTERVAL
     backend_url = ACTIVE_RULES_SYNC_URL
     
-    print("Starting manual rules polling thread (interval: 30s)...")
+    print(f"Starting manual rules polling thread (interval: {poll_interval}s)...")
     
     while True:
         try:
@@ -445,7 +462,7 @@ def handle_manual_rules():
                         elif action == 'ALLOW':
                             print(f"[Manual] Applying ALLOW rule for IP: {ip_address}")
                             # For ALLOW, we remove any existing block for this IP
-                            rule_manager._remove_rule(ip_address)
+                            rule_manager._remove_rule(normalize_block_target(ip_address))
                 
                 # Check for deleted rules (exist in last_rules but not in current_rules)
                 for rule_key in list(last_rules.keys()):
@@ -453,7 +470,7 @@ def handle_manual_rules():
                         old_rule = last_rules[rule_key]
                         ip_address = old_rule.get('ip_address')
                         print(f"[Manual] Removing rule for IP: {ip_address}")
-                        rule_manager._remove_rule(ip_address)
+                        rule_manager._remove_rule(normalize_block_target(ip_address))
                 
                 last_rules = current_rules
                 
@@ -470,6 +487,18 @@ def handle_manual_rules():
             print(f"[Manual Rules] Error fetching rules: {e}")
             print(f"[Manual Rules] Traceback: {traceback.format_exc()}")
             time.sleep(5)  # Wait before retry on error
+
+def sync_switch_rules_worker():
+    """Periodically sync switch ACLs into the backend so switch state stays authoritative."""
+    if not MANUAL_RULES_SYNC_TOKEN:
+        print("[Switch Sync] RULE_SYNC_TOKEN is not set; skipping switch sync.")
+        return
+
+    print(f"[Switch Sync] Starting switch rules sync thread (interval: {SWITCH_SYNC_INTERVAL}s)...")
+
+    while True:
+        time.sleep(SWITCH_SYNC_INTERVAL)
+        import_switch_rules_to_backend(context="Switch Sync")
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup_iptables)
     signal.signal(signal.SIGTERM, cleanup_iptables)
@@ -489,6 +518,10 @@ if __name__ == "__main__":
     # Start the Manual Rules Polling thread as a daemon thread
     manual_rules_thread = threading.Thread(target=handle_manual_rules, daemon=True)
     manual_rules_thread.start()
+
+    # Start the Switch Sync thread as a daemon thread
+    switch_sync_thread = threading.Thread(target=sync_switch_rules_worker, daemon=True)
+    switch_sync_thread.start()
 
     # Start Scapy sniffing on the mirrored interface (read-only)
     try:

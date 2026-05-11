@@ -21,6 +21,8 @@ class ManualRulesController extends Controller
 
         $query = ManualFirewallRule::with('creator:id,email,name');
 
+        $hasStatusFilter = $request->filled('status');
+
         // Apply filters
         if ($request->filled('ip')) {
             $query->byIp($request->input('ip'));
@@ -30,8 +32,10 @@ class ManualRulesController extends Controller
             $query->byAction($request->input('action'));
         }
 
-        if ($request->filled('status')) {
+        if ($hasStatusFilter) {
             $query->byStatus($request->input('status'));
+        } else {
+            $query->whereNotIn('status', ['EXPIRED', 'DELETED']);
         }
 
         if ($request->filled('port')) {
@@ -181,6 +185,7 @@ class ManualRulesController extends Controller
             'rules.*.port' => 'nullable|integer|min:1|max:65535',
             'rules.*.notes' => 'nullable|string|max:500',
             'rules.*.status' => 'nullable|in:ACTIVE,EXPIRED,DELETED',
+            'rules.*.acl_name' => 'nullable|string|max:128',
         ]);
 
         $systemUser = User::firstOrCreate(
@@ -192,42 +197,76 @@ class ManualRulesController extends Controller
         );
 
         $imported = 0;
+        $removed = 0;
 
-        DB::transaction(function () use ($validated, $systemUser, &$imported) {
+        DB::transaction(function () use ($validated, $systemUser, &$imported, &$removed) {
             $snapshot = collect($validated['rules'])
                 ->map(function (array $incomingRule) {
+                    $notes = $incomingRule['notes'] ?? null;
+                    if (!$notes && !empty($incomingRule['acl_name'])) {
+                        $notes = 'Imported from switch ACL ' . $incomingRule['acl_name'];
+                    }
+
                     return [
                         'ip_address' => $incomingRule['ip_address'],
                         'action' => $incomingRule['action'],
                         'port' => $incomingRule['port'] ?? null,
                         'rule_type' => $incomingRule['rule_type'] ?? 'PERMANENT',
-                        'notes' => $incomingRule['notes'] ?? 'Imported from switch ACL',
+                        'notes' => $notes ?? 'Imported from switch ACL',
                     ];
                 })
                 ->values();
 
-            // Treat the switch snapshot as authoritative during bootstrap.
-            ManualFirewallRule::query()
+            $snapshotKeys = $snapshot->map(function (array $rule) {
+                return $this->buildRuleKey($rule['ip_address'], $rule['action'], $rule['port']);
+            })->all();
+
+            $snapshotKeySet = array_fill_keys($snapshotKeys, true);
+
+            $activeBlockRules = ManualFirewallRule::query()
                 ->where('status', 'ACTIVE')
-                ->update(['status' => 'DELETED']);
+                ->where('action', 'BLOCK')
+                ->get();
+
+            foreach ($activeBlockRules as $existingRule) {
+                $key = $this->buildRuleKey($existingRule->ip_address, $existingRule->action, $existingRule->port);
+                if (!isset($snapshotKeySet[$key])) {
+                    $existingRule->update(['status' => 'DELETED']);
+                    $this->recordIntervention($existingRule, 'deleted');
+                    $removed++;
+                }
+            }
 
             foreach ($snapshot as $incomingRule) {
-                $rule = ManualFirewallRule::updateOrCreate(
-                    [
-                        'ip_address' => $incomingRule['ip_address'],
-                        'action' => $incomingRule['action'],
-                        'port' => $incomingRule['port'],
-                    ],
-                    [
-                        'rule_type' => $incomingRule['rule_type'],
-                        'expiration_at' => null,
-                        'notes' => $incomingRule['notes'],
-                        'created_by' => $systemUser->id,
-                        'status' => 'ACTIVE',
-                    ]
-                );
+                $rule = ManualFirewallRule::firstOrNew([
+                    'ip_address' => $incomingRule['ip_address'],
+                    'action' => $incomingRule['action'],
+                    'port' => $incomingRule['port'],
+                ]);
 
-                $this->recordIntervention($rule, 'imported');
+                $notes = $incomingRule['notes'];
+                if ($rule->exists && $rule->notes) {
+                    $notes = $rule->notes;
+                }
+
+                $rule->fill([
+                    'rule_type' => $incomingRule['rule_type'],
+                    'expiration_at' => null,
+                    'notes' => $notes,
+                    'status' => 'ACTIVE',
+                ]);
+
+                if (!$rule->exists) {
+                    $rule->created_by = $systemUser->id;
+                }
+
+                $rule->save();
+
+                if ($rule->wasRecentlyCreated || $rule->wasChanged()) {
+                    $eventType = $rule->wasRecentlyCreated ? 'imported' : 'sync-updated';
+                    $this->recordIntervention($rule, $eventType);
+                }
+
                 $imported++;
             }
         });
@@ -235,6 +274,33 @@ class ManualRulesController extends Controller
         return response()->json([
             'message' => 'Switch ACL rules imported successfully.',
             'imported' => $imported,
+            'removed' => $removed,
+        ]);
+    }
+
+    /**
+     * Remove all currently active manual firewall rules.
+     */
+    public function destroyActive()
+    {
+        ManualFirewallRule::updateExpiredRules();
+
+        $rules = ManualFirewallRule::currentlyActive()
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        $deleted = 0;
+
+        foreach ($rules as $rule) {
+            $rule->update(['status' => 'DELETED']);
+            $this->broadcastRuleChange('deleted', $rule);
+            $this->recordIntervention($rule, 'deleted');
+            $deleted++;
+        }
+
+        return response()->json([
+            'message' => 'All active rules have been removed.',
+            'deleted' => $deleted,
         ]);
     }
 
@@ -366,5 +432,11 @@ class ManualRulesController extends Controller
                 'password' => bcrypt(bin2hex(random_bytes(16))),
             ]
         );
+    }
+
+    private function buildRuleKey(string $ipAddress, string $action, $port): string
+    {
+        $portKey = $port === null ? 'any' : (string) $port;
+        return strtoupper($action) . '|' . $ipAddress . '|' . $portKey;
     }
 }

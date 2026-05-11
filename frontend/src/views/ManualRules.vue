@@ -7,12 +7,20 @@
           <h1 class="text-3xl font-bold">Manual IP Rules</h1>
           <p class="text-slate-400 mt-2">Create and manage firewall rules for blocking or allowing specific IP addresses</p>
         </div>
-        <button
-          @click="showCreateModal = true"
-          class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-semibold transition"
-        >
-          + New Rule
-        </button>
+        <div class="flex flex-col sm:flex-row gap-3">
+          <button
+            @click="showClearAllConfirm = true"
+            class="px-4 py-2 border border-red-700 text-red-300 rounded-lg font-semibold transition hover:bg-red-900/30"
+          >
+            Remove All Active
+          </button>
+          <button
+            @click="showCreateModal = true"
+            class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg font-semibold transition"
+          >
+            + New Rule
+          </button>
+        </div>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -315,6 +323,30 @@
           </div>
         </div>
       </div>
+
+      <div v-if="showClearAllConfirm" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div class="bg-slate-900 rounded-lg border border-slate-800 p-6 max-w-sm">
+          <h3 class="text-lg font-semibold text-white mb-4">Remove All Active Rules?</h3>
+          <p class="text-slate-300 mb-6">
+            This will delete all active manual rules and remove them from the switch.
+          </p>
+          <div class="flex gap-3 justify-end">
+            <button
+              @click="showClearAllConfirm = false"
+              class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded transition"
+            >
+              Cancel
+            </button>
+            <button
+              @click="clearAllRules"
+              :disabled="clearingAll"
+              class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition disabled:opacity-60"
+            >
+              Remove All
+            </button>
+          </div>
+        </div>
+      </div>
     </teleport>
   </div>
 </template>
@@ -337,13 +369,15 @@ export default {
     const showCreateModal = ref(false);
     const showEditModal = ref(false);
     const showDeleteConfirm = ref(false);
+    const showClearAllConfirm = ref(false);
+    const clearingAll = ref(false);
     const editingRule = ref(null);
     const ruleToDelete = ref(null);
 
     const filters = ref({
       ip: '',
       action: '',
-      status: '',
+      status: 'ACTIVE',
       port: null,
       dateFrom: '',
       dateTo: '',
@@ -384,7 +418,7 @@ export default {
       filters.value = {
         ip: '',
         action: '',
-        status: '',
+        status: 'ACTIVE',
         port: null,
         dateFrom: '',
         dateTo: '',
@@ -446,6 +480,22 @@ export default {
       }
     };
 
+    const clearAllRules = async () => {
+      clearingAll.value = true;
+      error.value = null;
+
+      try {
+        await manualRulesService.clearActiveRules();
+        showClearAllConfirm.value = false;
+        await fetchRules();
+      } catch (err) {
+        error.value = err.response?.data?.message || 'Failed to remove active rules';
+        console.error(err);
+      } finally {
+        clearingAll.value = false;
+      }
+    };
+
     const formatDate = (dateString) => {
       const date = new Date(dateString);
       return new Intl.DateTimeFormat('en-US', {
@@ -494,6 +544,8 @@ export default {
       showCreateModal,
       showEditModal,
       showDeleteConfirm,
+      showClearAllConfirm,
+      clearingAll,
       editingRule,
       ruleToDelete,
       fetchRules,
@@ -506,6 +558,7 @@ export default {
       handleRuleSave,
       confirmDelete,
       deleteRule,
+      clearAllRules,
       formatDate,
       formatExpirationTime,
     };
