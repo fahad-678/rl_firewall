@@ -105,7 +105,7 @@ except Exception as e:
 # Initialize core components.
 flow_manager = FlowManager(window_size=10)
 dqn_agent = DQNAgent(
-    input_dim=12, action_dim=3,
+    input_dim=16, action_dim=4,
     epsilon_start=EPSILON_START, epsilon_end=EPSILON_END,
 )
 # Initialize RuleManager from environment (env overrides defaults)
@@ -441,8 +441,17 @@ def process_mirrored_packet(scapy_pkt):
                     rule_manager.deploy_block_rule(src_ip, duration_seconds=600)
                     status = "BLOCKED"
                 elif ai_action == 2:
-                    rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=50, duration_seconds=300)
+                    rule_manager.deploy_rate_limit_rule(src_ip, limit_pps=50, duration_seconds=300)
                     status = "RATE_LIMITED"
+                elif ai_action == 3:
+                    # DOS_MITIGATE: Extract DOS metrics from state vector (dims 12-15)
+                    flow_metrics = {
+                        'packets_per_sec': float(state_vector[12]) * 1000 if len(state_vector) > 12 else 0.0,
+                        'source_conn_density': float(state_vector[14]) * 50 if len(state_vector) > 14 else 0.0,
+                        'synchronized_flag': float(state_vector[15]) >= 0.5 if len(state_vector) > 15 else False,
+                    }
+                    rule_manager.deploy_dos_mitigate_rule(src_ip, flow_metrics)
+                    status = "DOS_MITIGATED"
                 else:
                     status = "ACCEPTED"
 

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from .model import FirewallDQN
 from .replay_buffer import ExperienceReplay
 class DQNAgent:
-    def __init__(self, input_dim=10, action_dim=3, lr=1e-3, gamma=0.99, batch_size=64,
+    def __init__(self, input_dim=16, action_dim=4, lr=1e-3, gamma=0.99, batch_size=64,
                  epsilon_start=0.9, epsilon_end=0.05, epsilon_decay=1000):
         self.action_dim = action_dim
         self.gamma = gamma
@@ -117,7 +117,7 @@ class DQNAgent:
         """
         Applies analyst feedback as high-priority replay samples.
         """
-        action_map = {'ALLOW': 0, 'BLOCK': 1, 'RATE_LIMIT': 2}
+        action_map = {'ALLOW': 0, 'BLOCK': 1, 'RATE_LIMIT': 2, 'DOS_MITIGATE': 3}
         correct_action = action_map.get(correct_action_label.upper())
         original_action = action_map.get(original_action_label.upper()) if original_action_label else None
 

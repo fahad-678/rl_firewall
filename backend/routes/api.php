@@ -18,6 +18,7 @@ Route::middleware(['web', 'admin'])->group(function () {
     Route::prefix('firewall')->group(function () {
         Route::get('/recent-telemetry', [FirewallController::class, 'getRecentTelemetry']);
         Route::get('/telemetry', [FirewallController::class, 'getTelemetry']);
+        Route::get('/dos-dashboard', [FirewallController::class, 'getDOSDashboard']);
         
         // Human-in-the-loop actions
         Route::post('/review', [FirewallController::class, 'review']);
@@ -48,6 +49,7 @@ Route::middleware(['web', 'admin'])->group(function () {
 // Endpoints called by the Python agent — authenticated via X-Rule-Sync-Token
 // header instead of browser session, because the agent has no Laravel session.
 Route::post('/firewall/telemetry', [FirewallController::class, 'receiveTelemetry']);
+Route::post('/firewall/dos-telemetry', [FirewallController::class, 'receiveDOSTelemetry']);
 Route::post('/ai/performance', [AiMetricsController::class, 'store']);
 
 Route::post('/firewall/rules/import-switch', [ManualRulesController::class, 'importSwitchRules']);

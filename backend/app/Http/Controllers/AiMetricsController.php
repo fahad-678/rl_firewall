@@ -54,11 +54,16 @@ class AiMetricsController extends Controller
             'threats_allowed'   => 'nullable|integer',
         ]);
 
-        $log = TrainingLog::create($validated);
+        // Use updateOrCreate to avoid unique primary-key insert errors
+        // (some deployments previously used `epoch` as the primary key).
+        $log = TrainingLog::updateOrCreate(
+            ['epoch' => $validated['epoch']],
+            $validated
+        );
 
         return response()->json([
             'message' => 'Epoch metrics saved successfully',
-            'log_id'  => $log->id
+            'log_id'  => $log->id ?? null
         ], 201);
     }
 

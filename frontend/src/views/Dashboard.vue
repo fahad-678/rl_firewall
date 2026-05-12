@@ -69,6 +69,88 @@
       </article>
     </section>
 
+    <!-- DOS/DDOS Metrics Section -->
+    <section class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 0ms; border-l-4 border-rose-500">
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">DOS Attacks (24h)</p>
+        <p class="mt-2 text-3xl font-semibold text-rose-300">{{ dosMetrics.total_attacks }}</p>
+        <p class="mt-1 text-xs text-slate-400">Detected and mitigated attacks</p>
+      </article>
+
+      <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 60ms; border-l-4 border-orange-500">
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Attack Types</p>
+        <div class="mt-2 space-y-1">
+          <div v-for="(count, type) in dosMetrics.attacks_by_type" :key="type" class="flex justify-between text-sm">
+            <span class="text-slate-300 capitalize">{{ type.replace(/_/g, ' ') }}</span>
+            <span class="font-semibold text-orange-300">{{ count }}</span>
+          </div>
+        </div>
+        <p class="mt-2 text-xs text-slate-400">Distribution by attack classification</p>
+      </article>
+
+      <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 120ms; border-l-4 border-amber-500">
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Severity Levels</p>
+        <div class="mt-2 space-y-1">
+          <div class="flex justify-between text-sm">
+            <span class="text-red-400">High</span>
+            <span class="font-semibold text-red-300">{{ dosMetrics.severity_distribution.high }}</span>
+          </div>
+          <div class="flex justify-between text-sm">
+            <span class="text-amber-400">Medium</span>
+            <span class="font-semibold text-amber-300">{{ dosMetrics.severity_distribution.medium }}</span>
+          </div>
+          <div class="flex justify-between text-sm">
+            <span class="text-yellow-400">Low</span>
+            <span class="font-semibold text-yellow-300">{{ dosMetrics.severity_distribution.low }}</span>
+          </div>
+        </div>
+        <p class="mt-2 text-xs text-slate-400">Based on attack intensity</p>
+      </article>
+
+      <article class="soc-panel stagger-in rounded-xl p-4" style="animation-delay: 180ms; border-l-4 border-emerald-500">
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-400">Mitigation Actions</p>
+        <div class="mt-2 space-y-1">
+          <div v-for="(count, action) in dosMetrics.mitigation_counts" :key="action" class="flex justify-between text-sm">
+            <span class="text-slate-300 capitalize">{{ action.replace(/_/g, ' ') }}</span>
+            <span class="font-semibold text-emerald-300">{{ count }}</span>
+          </div>
+        </div>
+        <p class="mt-2 text-xs text-slate-400">Responses deployed</p>
+      </article>
+    </section>
+
+    <!-- Top DOS Sources Table -->
+    <section v-if="dosMetrics.top_sources.length > 0" class="soc-panel rounded-xl overflow-hidden">
+      <div class="border-b border-[var(--soc-border)] px-5 py-4">
+        <h3 class="text-lg font-semibold text-slate-100">Top DOS Attack Sources (24h)</h3>
+        <p class="mt-1 text-xs text-slate-400">Most prolific attackers by frequency and intensity</p>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead class="border-b border-[var(--soc-border)] bg-slate-900/50">
+            <tr>
+              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">Source IP</th>
+              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">Attack Count</th>
+              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">Max Severity</th>
+              <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">Peak PPS</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-[var(--soc-border)]">
+            <tr v-for="source in dosMetrics.top_sources" :key="source.source_ip" class="hover:bg-slate-800/30">
+              <td class="px-5 py-3 font-mono text-sm font-semibold text-slate-100">{{ source.source_ip }}</td>
+              <td class="px-5 py-3 text-sm text-slate-300">{{ source.attack_count }}</td>
+              <td class="px-5 py-3">
+                <span :class="getSeverityBadge(source.max_severity)" class="inline-block rounded-md px-2 py-1 text-[11px] font-semibold">
+                  {{ (source.max_severity * 100).toFixed(0) }}%
+                </span>
+              </td>
+              <td class="px-5 py-3 font-mono text-sm text-slate-300">{{ source.max_pps || 'N/A' }} pps</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="soc-panel rounded-xl p-4 sm:p-5">
       <div class="grid grid-cols-1 gap-3 lg:grid-cols-4">
         <div>
@@ -290,6 +372,14 @@ const isLoading = ref(true);
 const selectedThreatId = ref(null);
 const noteDraft = ref('');
 const liveTelemetrySeen = ref(false);
+const dosMetrics = ref({
+  total_attacks: 0,
+  attacks_by_type: {},
+  severity_distribution: { low: 0, medium: 0, high: 0 },
+  mitigation_counts: {},
+  top_sources: [],
+  period_hours: 24,
+});
 const filters = ref({
   action: 'ALL',
   port: '',
@@ -419,8 +509,22 @@ const fetchInitialTelemetry = async () => {
   }
 };
 
+const fetchDOSMetrics = async () => {
+  try {
+    const response = await axios.get('/api/firewall/dos-dashboard');
+    dosMetrics.value = response.data;
+  } catch (error) {
+    console.error("Failed to fetch DOS metrics", error);
+    // Don't show error to user; graceful degradation if DOS telemetry unavailable
+  }
+};
+
 onMounted(async () => {
   await fetchInitialTelemetry();
+  await fetchDOSMetrics();
+
+  // Refresh DOS metrics every 30 seconds
+  setInterval(fetchDOSMetrics, 30000);
 
   echo.channel('firewall-telemetry')
       .listen('.threat.detected', (e) => {
@@ -469,6 +573,16 @@ const getStatusBadge = (action) => {
     case 'RATE_LIMITED': return `${baseClasses} border border-amber-400/40 bg-amber-500/15 text-amber-200`;
     case 'NEEDS_REVIEW': return `${baseClasses} border border-yellow-400/40 bg-yellow-400/15 text-yellow-200`;
     default: return `${baseClasses} border border-slate-500/40 bg-slate-600/25 text-slate-200`;
+  }
+};
+
+const getSeverityBadge = (severity) => {
+  if (severity >= 0.67) {
+    return 'border border-red-400/40 bg-red-500/15 text-red-200';
+  } else if (severity >= 0.33) {
+    return 'border border-amber-400/40 bg-amber-500/15 text-amber-200';
+  } else {
+    return 'border border-yellow-400/40 bg-yellow-500/15 text-yellow-200';
   }
 };
 

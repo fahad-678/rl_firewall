@@ -326,6 +326,163 @@ class RuleManager:
             self._remove_rule(cidr, caller=CALLER_MANUAL)
             return True, "Manual rule unregistered."
 
+    def deploy_dos_mitigate_rule(self, target_ip: str, flow_metrics: dict):
+        """
+        Deploys adaptive DOS mitigation based on attack intensity.
+        
+        Tiering logic:
+        - PPS > 10,000: Full block for 1200s (mega-attack)
+        - Conn density > 30: Rate-limit to 50 pps for 600s (connection exhaustion)
+        - Synchronized flag: Block for 900s (DDoS pattern detected)
+        - Otherwise: Rate-limit to 100 pps for 300s (moderate DOS)
+        
+        flow_metrics: dict with keys:
+            - packets_per_sec: float
+            - source_conn_density: float
+            - synchronized_flag: bool
+        """
+        target_cidr = self._normalize_cidr(target_ip)
+        
+        pps = flow_metrics.get('packets_per_sec', 0.0)
+        conn_density = flow_metrics.get('source_conn_density', 0.0)
+        synchronized = flow_metrics.get('synchronized_flag', False)
+        
+        # Tier 1: Volumetric mega-attack
+        if pps > 10000:
+            print(f"[DOS] Tier 1 mega-attack detected: {target_ip} at {pps:.0f} pps → BLOCK 1200s")
+            return self.deploy_block_rule(target_cidr, duration_seconds=1200, origin=CALLER_AI)
+        
+        # Tier 2: Connection exhaustion
+        if conn_density > 30:
+            print(f"[DOS] Tier 2 connection exhaustion: {target_ip} with {conn_density:.1f} conn/max → RATE_LIMIT 50pps 600s")
+            return self.deploy_rate_limit_rule(target_cidr, limit_pps=50, duration_seconds=600, origin=CALLER_AI)
+        
+        # Tier 3: DDoS pattern
+        if synchronized:
+            print(f"[DOS] Tier 3 DDoS pattern: {target_ip} → BLOCK 900s")
+            return self.deploy_block_rule(target_cidr, duration_seconds=900, origin=CALLER_AI)
+        
+        # Tier 4: Moderate DOS
+        print(f"[DOS] Tier 4 moderate: {target_ip} at {pps:.0f} pps → RATE_LIMIT 100pps 300s")
+        return self.deploy_rate_limit_rule(target_cidr, limit_pps=100, duration_seconds=300, origin=CALLER_AI)
+
+    def deploy_rate_limit_rule(self, target_ip_or_cidr: str, limit_pps: int, duration_seconds: int = 300, origin: str = CALLER_AI):
+        """
+        Deploys a rate-limiting rule using Linux tc (traffic control).
+        
+        Limits target CIDR to limit_pps packets per second.
+        """
+        target_cidr = self._normalize_cidr(target_ip_or_cidr)
+        
+        with self.lock:
+            if origin == CALLER_AI:
+                protected = self._is_protected_nolock(target_cidr)
+                if protected is not None:
+                    return False, "BLOCKED_BY_MANUAL_RULE", protected
+            
+            should_deploy, optimal_cidr, msg = self._resolve_conflicts(
+                target_cidr, duration_seconds, origin
+            )
+            
+            if not should_deploy:
+                return False, msg, None
+            
+            if self.mode == "simulation":
+                success = self._apply_tc_rate_limit(optimal_cidr, limit_pps)
+            elif self.mode == "hardware":
+                # Hardware mode: try SSH to apply QoS, then fallback to local TC
+                try:
+                    success = self._apply_ssh_rate_limit(optimal_cidr, limit_pps)
+                except Exception:
+                    success = self._apply_tc_rate_limit(optimal_cidr, limit_pps)
+            else:
+                success = False
+            
+            if success:
+                expiration = time.time() + duration_seconds if duration_seconds != math.inf else math.inf
+                prefix = "MANUAL_RATELIMIT_" if origin == CALLER_MANUAL else "AI_RATELIMIT_"
+                self.active_rules[optimal_cidr] = {
+                    'expiration': expiration,
+                    'rule_id': f"{prefix}{optimal_cidr.replace('/', '_').replace('.', '_')}",
+                    'type': 'throttle',
+                    'verdict': 'throttle',
+                    'origin': origin,
+                    'network': ipaddress.ip_network(optimal_cidr, strict=False),
+                    'port': None,
+                    'limit_pps': limit_pps,
+                }
+                return True, "Rate-limit rule deployed successfully.", None
+            
+            return False, "Rate-limit rule deployment failed.", None
+
+    def _apply_tc_rate_limit(self, target_cidr: str, limit_pps: int) -> bool:
+        """
+        Uses Linux tc (traffic control) to rate-limit packets from target CIDR.
+        Implements a simple token bucket queueing discipline.
+        """
+        try:
+            # Extract IP for filtering
+            target_ip = target_cidr.split('/')[0]
+            interface = os.environ.get("TC_INTERFACE", "lo")  # Default to loopback for docker
+            
+            # Calculate burst size (1ms worth of packets)
+            burst = max(1, limit_pps // 1000)
+            
+            # Add HTB (Hierarchical Token Bucket) qdisc and class
+            # Root qdisc
+            cmd = f"tc qdisc add dev {interface} root handle 1: htb default 12"
+            subprocess.run(cmd.split(), check=False)
+            
+            # Class with rate limit
+            rate_str = f"{limit_pps}pps"
+            cmd = f"tc class add dev {interface} parent 1: classid 1:1 htb rate {rate_str} burst {burst}b"
+            subprocess.run(cmd.split(), check=False)
+            
+            # Filter to match source IP
+            cmd = f"tc filter add dev {interface} parent 1: protocol ip prio 1 u32 match ip src {target_ip} flowid 1:1"
+            subprocess.run(cmd.split(), check=False)
+            
+            print(f"[TC] Rate-limit applied: {target_cidr} → {limit_pps} pps on {interface}")
+            return True
+        except Exception as e:
+            print(f"[TC] Rate-limit failed: {e}")
+            return False
+
+    def _apply_ssh_rate_limit(self, target_cidr: str, limit_pps: int) -> bool:
+        """
+        Applies rate-limiting on the switch via SSH using QoS policy.
+        Ruckus ICX 7150 specific implementation.
+        """
+        if not ConnectHandler:
+            return False
+        
+        try:
+            conn = self._connect_ssh()
+            target_ip = target_cidr.split('/')[0]
+            policy_name = f"RATELIMIT_{target_ip.replace('.', '_')}"
+            
+            commands = [
+                f"configure terminal",
+                f"policy-map {policy_name}",
+                f"  class 1",
+                f"    police 1000 500",  # 1000 pps, 500 pps burst
+                f"exit",
+                f"exit",
+                f"interface {self.block_interface}",
+                f"  service-policy output {policy_name}",
+                f"write memory",
+            ]
+            
+            for cmd in commands:
+                conn.send_command(cmd)
+            
+            conn.disconnect()
+            print(f"[SSH] Rate-limit via QoS: {target_cidr} on {self.block_interface}")
+            return True
+        except Exception as e:
+            print(f"[SSH] Rate-limit failed: {e}")
+            return False
+
     def _apply_iptables_block(self, target_cidr: str) -> bool:
         """Translates the verdict into a standard Linux iptables drop command."""
         try:

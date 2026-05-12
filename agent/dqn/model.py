@@ -3,10 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class FirewallDQN(nn.Module):
-    def __init__(self, input_dim=10, output_dim=3):
+    def __init__(self, input_dim=16, output_dim=4):
         """
-        Input: 10-dimensional state vector from FlowManager.
-        Output: Q-values for 3 discrete actions (Accept, Drop, Rate Limit).
+        Input: 16-dimensional state vector from FlowManager (12 original + 4 DOS indicators).
+        Output: Q-values for 4 discrete actions (Allow, Block, Rate Limit, DOS Mitigate).
         """
         super(FirewallDQN, self).__init__()
         
