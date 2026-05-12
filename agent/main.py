@@ -174,9 +174,27 @@ def telemetry_worker():
     while True:
         payload = telemetry_queue.get()
         try:
-            headers = {'X-Rule-Sync-Token': RULE_SYNC_TOKEN} if RULE_SYNC_TOKEN else {}
-            requests.post("http://localhost/api/firewall/telemetry", json=payload, headers=headers, timeout=0.5)
-        except Exception:
+            # FORCE Laravel to return JSON errors instead of 302 redirects
+            headers = {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            }
+            if RULE_SYNC_TOKEN:
+                headers['X-Rule-Sync-Token'] = RULE_SYNC_TOKEN
+                
+            resp = requests.post(
+                "http://localhost/api/firewall/telemetry", 
+                json=payload, 
+                headers=headers, 
+                timeout=0.5
+            )
+            
+            # Print the actual error to the terminal if it fails
+            if resp.status_code not in (200, 201):
+                print(f"⚠️ [Telemetry] Failed: HTTP {resp.status_code} - {resp.text}")
+                
+        except Exception as e:
+            # print(f"Exception: {e}") # Optional: uncomment for deep debugging
             pass
         telemetry_queue.task_done()
 
@@ -460,7 +478,7 @@ def process_mirrored_packet(scapy_pkt):
                 dst_port,
                 confidence,
                 status,
-                flow_key=flow_key,
+                flow_key=str(flow_key),
                 reward=float(total_reward),
                 latency_ms=float(processing_time_ms),
                 terminal=is_terminal,
@@ -474,11 +492,11 @@ def process_mirrored_packet(scapy_pkt):
                     "confidence": float(confidence),
                     "reward": float(total_reward),
                     "latency_ms": float(processing_time_ms),
-                    "flow_key": flow_key,
+                    "flow_key": str(flow_key),
                     "terminal": is_terminal,
                 }
                 redis_client.publish('firewall-telemetry', json.dumps(telemetry_data))
-                print(f"[AI] Evaluated IP {src_ip} -> {status} (Reward: {total_reward:.2f})", flush=True)
+                print(f"[AI] Evaluated IP {src_ip}--{dst_ip} -> {status} (Reward: {total_reward:.2f})", flush=True)
 
 def handle_human_overrides():
     """
