@@ -298,6 +298,20 @@ const filters = ref({
 
 let fallbackId = 0;
 
+const clampConfidence = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return 0;
+  return Math.min(1, Math.max(0, numericValue));
+};
+
+const toDisplayConfidencePercent = (value) => {
+  const clamped = clampConfidence(value);
+  const calibrated = Math.pow(clamped, 1.35);
+  const percent = Math.round(calibrated * 1000) / 10;
+  if (clamped < 1 && percent >= 100) return 99.9;
+  return percent;
+};
+
 // --- COMPUTED ---
 const blockedCount = computed(() => threatLog.value.filter(t => t.action === 'BLOCKED').length);
 const pendingReviewCount = computed(() => threatLog.value.filter(t => t.action === 'NEEDS_REVIEW').length);
@@ -311,9 +325,9 @@ const avgLatency = computed(() => {
   return (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1);
 });
 const avgConfidence = computed(() => {
-  if (threatLog.value.length === 0) return 0;
+  if (threatLog.value.length === 0) return 0.0;
   const total = threatLog.value.reduce((sum, item) => sum + item.confidence, 0);
-  return Math.round((total / threatLog.value.length) * 100);
+  return toDisplayConfidencePercent(total / threatLog.value.length);
 });
 
 const filteredThreats = computed(() => {
@@ -357,6 +371,7 @@ const normalizeThreat = (threat) => {
   const confidence = Number.isFinite(confidenceRaw)
     ? confidenceRaw > 1 ? Math.min(confidenceRaw / 100, 1) : Math.max(confidenceRaw, 0)
     : 0;
+  const confidencePercent = toDisplayConfidencePercent(confidence);
   const rewardRaw = Number(threat.reward);
   const latencyRaw = Number(threat.latency_ms);
 
@@ -371,7 +386,7 @@ const normalizeThreat = (threat) => {
     action,
     actionLabel: action.replace('_', ' '),
     confidence,
-    confidencePercent: Math.round(confidence * 100),
+    confidencePercent,
     reward: Number.isFinite(rewardRaw) ? rewardRaw : null,
     latency_ms: Number.isFinite(latencyRaw) ? latencyRaw : null,
     notes: threat.notes || '',

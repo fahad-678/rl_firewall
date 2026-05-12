@@ -38,6 +38,7 @@ SWITCH_SYNC_INTERVAL = get_env_int('SWITCH_SYNC_INTERVAL', 15)
 MANUAL_RULES_POLL_INTERVAL = get_env_int('MANUAL_RULES_POLL_INTERVAL', 30)
 AI_RULES_PUBLISH_INTERVAL = get_env_int('AI_RULES_PUBLISH_INTERVAL', 10)
 AI_RULES_REDIS_TTL = get_env_int('AI_RULES_REDIS_TTL', 30)
+ACCEPT_BASELINE_REWARD = get_env_float('ACCEPT_BASELINE_REWARD', 0.5)
 
 # AI enforcement gates. Defaults assume a pretrained model in deployment:
 # no warmup needed and no exploration. Set MIN_LEARNING_STEPS / EPSILON_START
@@ -346,7 +347,8 @@ def process_mirrored_packet(scapy_pkt):
                 action = ai_action
                 base_reward = 0.0
 
-            total_reward = base_reward + latency_penalty
+            accept_baseline = ACCEPT_BASELINE_REWARD if action == 0 else 0.0
+            total_reward = base_reward + accept_baseline + latency_penalty
             loss_val = None
 
             if flow_key in flow_states:
