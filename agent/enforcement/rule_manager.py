@@ -355,7 +355,7 @@ class RuleManager:
         # Tier 2: Connection exhaustion
         if conn_density > 30:
             print(f"[DOS] Tier 2 connection exhaustion: {target_ip} with {conn_density:.1f} conn/max → RATE_LIMIT 50pps 600s")
-            return self.deploy_rate_limit_rule(target_cidr, limit_pps=50, duration_seconds=600, origin=CALLER_AI)
+            return self.deploy_rate_limit_rule(target_cidr, max_packets_per_second=50, duration_seconds=600, origin=CALLER_AI)
         
         # Tier 3: DDoS pattern
         if synchronized:
@@ -364,7 +364,7 @@ class RuleManager:
         
         # Tier 4: Moderate DOS
         print(f"[DOS] Tier 4 moderate: {target_ip} at {pps:.0f} pps → RATE_LIMIT 100pps 300s")
-        return self.deploy_rate_limit_rule(target_cidr, limit_pps=100, duration_seconds=300, origin=CALLER_AI)
+        return self.deploy_rate_limit_rule(target_cidr, max_packets_per_second=100, duration_seconds=300, origin=CALLER_AI)
 
     def deploy_rate_limit_rule(self, target_ip_or_cidr: str, limit_pps: int, duration_seconds: int = 300, origin: str = CALLER_AI):
         """

@@ -459,7 +459,7 @@ def process_mirrored_packet(scapy_pkt):
                     rule_manager.deploy_block_rule(src_ip, duration_seconds=600)
                     status = "BLOCKED"
                 elif ai_action == 2:
-                    rule_manager.deploy_rate_limit_rule(src_ip, limit_pps=50, duration_seconds=300)
+                    rule_manager.deploy_rate_limit_rule(src_ip, max_packets_per_second=50, duration_seconds=300)
                     status = "RATE_LIMITED"
                 elif ai_action == 3:
                     # DOS_MITIGATE: Extract DOS metrics from state vector (dims 12-15)
