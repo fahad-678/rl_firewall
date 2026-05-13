@@ -231,23 +231,21 @@ class FlowManager:
         normalized = min(1.0, conn_count / 50.0)
         return normalized
     
-    def _is_synchronized_attack(self, src_ip: str, flow_pps: float, global_pps_threshold=5000) -> bool:
+    def _is_synchronized_attack(self, src_ip: str, flow_pps: float, global_pps_threshold=100) -> bool:
         """
         Detect DDoS pattern: synchronized attack across multiple flows.
-        Returns True if:
-        - Global source PPS > 5000 AND
-        - Current flow PPS > 100 AND
-        - Connection count > 5 (distributed across flows)
         """
         if not src_ip or src_ip not in self.source_metrics:
             return False
         
+        # LOWERED LIMIT: Allow a single high-speed flow to trigger the detection
         conn_count = self.source_metrics[src_ip]['connection_count']
-        if conn_count < 5:
+        if conn_count < 1: 
             return False
         
+        # LOWERED LIMIT: Trigger if global PPS is over 100 (instead of 5000)
         global_pps = self._get_source_pps(src_ip)
-        if global_pps > global_pps_threshold and flow_pps > 100:
+        if global_pps > global_pps_threshold and flow_pps > 50:
             return True
         
         return False
